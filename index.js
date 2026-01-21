@@ -33,7 +33,10 @@ io.on("connection", (socket) => {
     parties.set(party.id, party);
 
     socket.join(party.id);
-    socket.emit("PARTY_STATE", party);
+    socket.emit("PARTY_STATE", {
+      ...party,
+      isHost: true
+    });
 
     console.log("Party created:", party.id);
   });
@@ -46,7 +49,10 @@ io.on("connection", (socket) => {
     }
 
     socket.join(partyId);
-    socket.emit("PARTY_STATE", party);
+    socket.emit("PARTY_STATE", {
+      ...party,
+      isHost: false
+    });
 
     io.to(partyId).emit("INFO", "Someone joined the party");
   });
@@ -56,14 +62,19 @@ io.on("connection", (socket) => {
     const party = parties.get(partyId);
     if (!party) return;
 
+    const isHost = socket.id === party.hostId;
+
     party.queue.push({
       id: uuidv4(),
-      ...track,
+      url: track.url,
+      title: track.title,
+      addedBy: isHost ? "Host" : "Guest",
       addedAt: Date.now()
     });
 
     io.to(partyId).emit("QUEUE_UPDATED", party.queue);
   });
+
 
   // PLAY (HOST ONLY)
   socket.on("PLAY", ({ partyId }) => {
