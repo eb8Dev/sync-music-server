@@ -20,13 +20,13 @@
 //     users: new Map(), // socketId -> { name, isHost, joinedAt }
 //     queue: [],        // { id, url, title, addedBy, votes: number, voters: Set<socketId> }
 //     skipVotes: new Set(), // Set<socketId>
-    
+
 //     // State
 //     currentIndex: 0,
 //     isPlaying: false,
 //     startedAt: null,
 //     isQueueLocked: false,
-    
+
 //     // Metadata
 //     createdAt: Date.now(),
 //     lastActiveAt: Date.now()
@@ -84,9 +84,9 @@
 //   socket.on("CREATE_PARTY", (data) => {
 //     // Handle both old (no arg) and new (obj arg) clients
 //     const username = (data && data.username) ? data.username : "Host";
-    
+
 //     const party = createParty(socket.id, username);
-    
+
 //     // Add host to users
 //     party.users.set(socket.id, {
 //       name: username,
@@ -102,7 +102,7 @@
 //       partyId: party.id, 
 //       isHost: true 
 //     });
-    
+
 //     broadcastPartyState(party.id);
 //     console.log("Party created:", party.id, "Host:", username);
 //   });
@@ -210,7 +210,7 @@
 //   //     // Trigger Skip
 //   //     io.to(partyId).emit("INFO", "Vote to skip passed!");
 //   //     party.skipVotes.clear();
-      
+
 //   //     // Advance Track
 //   //     nextTrack(party);
 //   //   } else {
@@ -236,7 +236,7 @@
 
 //   //   // Remove from users
 //   //   party.users.delete(targetSocketId);
-    
+
 //   //   // Force disconnect that socket from the party
 //   //   const targetSocket = io.sockets.sockets.get(targetSocketId);
 //   //   if (targetSocket) {
@@ -256,7 +256,7 @@
 
 //   //   party.isPlaying = true;
 //   //   party.startedAt = Date.now();
-    
+
 //   //   broadcastPartyState(partyId);
 //   // });
 
@@ -271,7 +271,7 @@
 //   socket.on("TRACK_ENDED", ({ partyId }) => {
 //     const party = getPartyOrError(socket, partyId);
 //     if (!party || party.hostId !== socket.id) return;
-    
+
 //     nextTrack(party);
 //   });
 
@@ -309,7 +309,7 @@
 //     party.isPlaying = true;
 //     party.startedAt = Date.now();
 //   }
-  
+
 //   broadcastPartyState(party.id);
 // }
 
@@ -491,6 +491,32 @@ io.on("connection", (socket) => {
       });
     }
   });
+  socket.on("END_PARTY", ({ partyId }) => {
+    const party = parties.get(partyId);
+    if (!party) return;
+
+    // Only host can end party
+    if (party.hostId !== socket.id) return;
+
+    // Notify everyone
+    io.to(partyId).emit("PARTY_ENDED", {
+      message: "The host has ended the party.",
+    });
+
+    // Kick everyone out of the room
+    const room = io.sockets.adapter.rooms.get(partyId);
+    if (room) {
+      for (const socketId of room) {
+        const s = io.sockets.sockets.get(socketId);
+        s?.leave(partyId);
+      }
+    }
+
+    // Delete party
+    parties.delete(partyId);
+
+    console.log("Party ended:", partyId);
+  });
 
   // ---------------- DISCONNECT ----------------
   socket.on("disconnect", () => {
@@ -510,9 +536,9 @@ setInterval(() => {
         currentIndex: party.currentIndex
       });
     }
-    // Auto-delete after 24h
-    if (now - party.createdAt > 24 * 60 * 60 * 1000) {
-       parties.delete(id);
+    // Auto-delete after 1h
+    if (now - party.createdAt > 1 * 60 * 60 * 1000) {
+      parties.delete(id);
     }
   }
 }, 5000);
