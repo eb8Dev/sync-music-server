@@ -74,6 +74,7 @@ io.on("connection", (socket) => {
     });
 
     io.to(partyId).emit("INFO", `${username} joined the party`);
+    broadcastPartySize(partyId);
     console.log("User joined party:", partyId, socket.id);
   });
 
@@ -85,6 +86,7 @@ io.on("connection", (socket) => {
     console.log("Host reclaimed party:", partyId, "New host:", socket.id);
     party.hostId = socket.id;
     socket.join(partyId);
+    broadcastPartySize(partyId);
   });
 
   // ---------------- CHANGE INDEX (HOST ONLY) ----------------
@@ -207,6 +209,7 @@ io.on("connection", (socket) => {
     
     // Check if the disconnected user was a host of any party
     for (const [partyId, party] of parties) {
+      broadcastPartySize(partyId);
       if (party.hostId === socket.id) {
         // Find a new host
         const room = io.sockets.adapter.rooms.get(partyId);
@@ -253,3 +256,9 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
+
+function broadcastPartySize(partyId) {
+  const room = io.sockets.adapter.rooms.get(partyId);
+  const size = room ? room.size : 0;
+  io.to(partyId).emit("PARTY_SIZE", { size });
+}
