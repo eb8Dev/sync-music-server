@@ -22,6 +22,7 @@ function createParty(hostId) {
     isPlaying: false,
     startedAt: null,
     elapsed: 0,
+    votesToSkip: new Set(),
     createdAt: Date.now(),
     lastActiveAt: Date.now()
   };
@@ -99,6 +100,9 @@ io.on("connection", (socket) => {
     party.currentIndex = newIndex;
     party.isPlaying = true; // Auto-play when changing track
     party.startedAt = Date.now();
+    party.elapsed = 0;
+    party.votesToSkip.clear();
+    io.to(partyId).emit("VOTE_UPDATE", { votes: 0, required: 0 });
 
     io.to(partyId).emit("PLAYBACK_UPDATE", {
       isPlaying: true,
@@ -124,6 +128,92 @@ io.on("connection", (socket) => {
 
     io.to(partyId).emit("QUEUE_UPDATED", party.queue);
     console.log("Track added:", newTrack.title, "Party:", partyId);
+  });
+
+  // ---------------- REMOVE TRACK (HOST ONLY) ----------------
+  socket.on("REMOVE_TRACK", ({ partyId, trackId }) => {
+    const party = getPartyOrError(socket, partyId);
+    if (!party || socket.id !== party.hostId) return;
+
+    const indexToRemove = party.queue.findIndex(t => t.id === trackId);
+    if (indexToRemove === -1) return;
+
+    // Logic to handle current index
+    if (indexToRemove < party.currentIndex) {
+      party.currentIndex--;
+    } else if (indexToRemove === party.currentIndex) {
+      // If removing current track, what to do?
+      // Option A: Stop playback
+      // Option B: Skip to next (implemented here)
+      if (party.isPlaying) {
+         // This is complex because clients are playing. 
+         // Simplest for now: Stop playback, let host restart.
+         party.isPlaying = false;
+         io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: false });
+      }
+    }
+
+    party.queue.splice(indexToRemove, 1);
+    
+    // Safety check if queue is now empty or index out of bounds
+    if (party.currentIndex >= party.queue.length) {
+        party.currentIndex = Math.max(0, party.queue.length - 1);
+    }
+
+    io.to(partyId).emit("QUEUE_UPDATED", party.queue);
+    // Also emit playback update to sync index if needed
+    if (indexToRemove <= party.currentIndex) {
+         io.to(partyId).emit("PLAYBACK_UPDATE", {
+            isPlaying: party.isPlaying,
+            startedAt: party.startedAt,
+            currentIndex: party.currentIndex
+        });
+    }
+
+    console.log("Track removed:", trackId, "Party:", partyId);
+  });
+
+  // ---------------- VOTE SKIP ----------------
+  socket.on("VOTE_SKIP", ({ partyId }) => {
+    const party = parties.get(partyId);
+    if (!party) return;
+
+    const room = io.sockets.adapter.rooms.get(partyId);
+    const size = room ? room.size : 0;
+
+    if (size < 5) return; // Min 5 users required
+
+    party.votesToSkip.add(socket.id);
+
+    const votes = party.votesToSkip.size;
+    const required = Math.ceil(size * 0.8);
+
+    io.to(partyId).emit("VOTE_UPDATE", { votes, required });
+
+    if (votes >= required) {
+      // Skip Track Logic
+      party.currentIndex++;
+      party.elapsed = 0;
+      party.votesToSkip.clear();
+      
+      // Notify vote reset
+      io.to(partyId).emit("VOTE_UPDATE", { votes: 0, required });
+
+      if (party.currentIndex >= party.queue.length) {
+        party.isPlaying = false;
+        party.currentIndex = 0;
+        io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: false });
+      } else {
+        party.isPlaying = true;
+        party.startedAt = Date.now();
+        io.to(partyId).emit("PLAYBACK_UPDATE", {
+          isPlaying: true,
+          startedAt: party.startedAt,
+          currentIndex: party.currentIndex
+        });
+      }
+      io.to(partyId).emit("INFO", "Skipped by vote!");
+    }
   });
 
   // ---------------- PLAY (HOST ONLY) ----------------
@@ -161,6 +251,9 @@ io.on("connection", (socket) => {
     if (!party || socket.id !== party.hostId) return;
 
     party.currentIndex++;
+    party.elapsed = 0;
+    party.votesToSkip.clear();
+    io.to(partyId).emit("VOTE_UPDATE", { votes: 0, required: 0 });
 
     if (party.currentIndex >= party.queue.length) {
       party.isPlaying = false;
