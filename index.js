@@ -294,9 +294,37 @@ io.on("connection", (socket) => {
     // Delete party
     parties.delete(partyId);
 
-    console.log("Party ended:", partyId);
-  });
-  // ---------------- DISCONNECT ----------------
+        console.log("Party ended:", partyId);
+
+      });
+
+    
+
+      // ---------------- REACTIONS ----------------
+
+      socket.on("SEND_REACTION", ({ partyId, emoji }) => {
+
+        // Validate emoji to prevent spam/abuse if necessary
+
+        const allowed = ["🔥", "❤️", "🎉", "😂", "👋", "💃"];
+
+        if (!allowed.includes(emoji)) return;
+
+    
+
+        io.to(partyId).emit("REACTION", {
+
+          emoji,
+
+          senderId: socket.id
+
+        });
+
+      });
+
+    
+
+      // ---------------- DISCONNECT ----------------
   socket.on("disconnect", () => {
     console.log("Disconnected:", socket.id);
     
