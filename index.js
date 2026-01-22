@@ -21,6 +21,7 @@ function createParty(hostId) {
     currentIndex: 0,
     isPlaying: false,
     startedAt: null,
+    elapsed: 0,
     createdAt: Date.now(),
     lastActiveAt: Date.now()
   };
@@ -241,8 +242,8 @@ setInterval(() => {
         currentIndex: party.currentIndex
       });
     }
-    // Auto-delete after 1h
-    if (now - party.createdAt > 60 * 60 * 1000) {
+    // Auto-delete after 24h
+    if (now - party.createdAt > 24 * 60 * 60 * 1000) {
       parties.delete(id);
     }
   }
