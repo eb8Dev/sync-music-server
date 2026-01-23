@@ -156,8 +156,9 @@ io.on("connection", (socket) => {
     party.queue.splice(indexToRemove, 1);
     
     // Safety check if queue is now empty or index out of bounds
-    if (party.currentIndex >= party.queue.length) {
-        party.currentIndex = Math.max(0, party.queue.length - 1);
+    // Allow staying at the end of the queue
+    if (party.currentIndex > party.queue.length) {
+        party.currentIndex = party.queue.length;
     }
 
     io.to(partyId).emit("QUEUE_UPDATED", party.queue);
@@ -201,8 +202,11 @@ io.on("connection", (socket) => {
 
       if (party.currentIndex >= party.queue.length) {
         party.isPlaying = false;
-        party.currentIndex = 0;
-        io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: false });
+        // Stay at end of queue
+        io.to(partyId).emit("PLAYBACK_UPDATE", { 
+          isPlaying: false, 
+          currentIndex: party.currentIndex 
+        });
       } else {
         party.isPlaying = true;
         party.startedAt = Date.now();
@@ -224,7 +228,8 @@ io.on("connection", (socket) => {
     if (party.queue.length === 0) return;
 
     party.isPlaying = true;
-    party.startedAt = Date.now();
+    // Resume from elapsed time (default 0)
+    party.startedAt = Date.now() - (party.elapsed || 0);
 
     io.to(partyId).emit("PLAYBACK_UPDATE", {
       isPlaying: true,
@@ -239,6 +244,9 @@ io.on("connection", (socket) => {
     if (!party || socket.id !== party.hostId) return;
 
     party.isPlaying = false;
+    if (party.startedAt) {
+      party.elapsed = Date.now() - party.startedAt;
+    }
 
     io.to(partyId).emit("PLAYBACK_UPDATE", {
       isPlaying: false
@@ -257,8 +265,11 @@ io.on("connection", (socket) => {
 
     if (party.currentIndex >= party.queue.length) {
       party.isPlaying = false;
-      party.currentIndex = 0;
-      io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: false });
+      // Stay at end of queue
+      io.to(partyId).emit("PLAYBACK_UPDATE", { 
+        isPlaying: false,
+        currentIndex: party.currentIndex
+      });
     } else {
       party.isPlaying = true;
       party.startedAt = Date.now();
