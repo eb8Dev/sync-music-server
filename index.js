@@ -25,7 +25,7 @@ function createParty(hostId, name, isPublic) {
     startedAt: null,
     elapsed: 0,
     votesToSkip: new Set(),
-    members: new Set(),
+    members: new Map(), // socketId -> { username, avatar }
     createdAt: Date.now(),
     lastActiveAt: Date.now()
   };
@@ -76,6 +76,20 @@ function broadcastPartySize(partyId) {
   io.to(partyId).emit("PARTY_SIZE", { size: party.members.size });
 }
 
+function broadcastMembersList(partyId) {
+  const party = parties.get(partyId);
+  if (!party) return;
+  
+  const membersList = Array.from(party.members.entries()).map(([id, user]) => ({
+    id,
+    username: user.username,
+    avatar: user.avatar,
+    isHost: id === party.hostId
+  }));
+
+  io.to(partyId).emit("MEMBERS_LIST", membersList);
+}
+
 // ---- Socket Logic ----
 io.on("connection", (socket) => {
   console.log("Connected:", socket.id);
@@ -84,15 +98,18 @@ io.on("connection", (socket) => {
   socket.on("CREATE_PARTY", (data) => {
     const name = data ? data.name : null;
     const isPublic = data ? data.isPublic : false;
+    const username = data ? data.username : "Host";
+    const avatar = data ? data.avatar : "👑";
     
     const party = createParty(socket.id, name, isPublic);
     parties.set(party.id, party);
 
-    party.members.add(socket.id);
+    party.members.set(socket.id, { username, avatar });
     socket.join(party.id);
 
-    socket.emit("PARTY_STATE", { ...party, isHost: true });
+    socket.emit("PARTY_STATE", { ...party, isHost: true, size: party.members.size });
     broadcastPartySize(party.id);
+    broadcastMembersList(party.id);
 
     console.log(`Party created: ${party.id} (Public: ${party.isPublic})`);
   });
@@ -107,17 +124,20 @@ io.on("connection", (socket) => {
     const partyId = typeof data === "string" ? data : data.partyId;
     const username =
       typeof data === "object" && data.username ? data.username : "Guest";
+    const avatar =
+      typeof data === "object" && data.avatar ? data.avatar : "👤";
 
     const party = getPartyOrError(socket, partyId);
     if (!party) return;
 
-    party.members.add(socket.id);
+    party.members.set(socket.id, { username, avatar });
     socket.join(partyId);
 
-    socket.emit("PARTY_STATE", { ...party, isHost: false });
+    socket.emit("PARTY_STATE", { ...party, isHost: false, size: party.members.size });
 
     io.to(partyId).emit("INFO", `${username} joined the party`);
     broadcastPartySize(partyId);
+    broadcastMembersList(partyId);
     emitVoteState(partyId, party);
 
     console.log("User joined party:", partyId, socket.id);
@@ -129,13 +149,54 @@ io.on("connection", (socket) => {
     if (!party) return;
 
     party.hostId = socket.id;
-    party.members.add(socket.id);
+    // We might need to update the socket ID in the members map if it changed
+    // But usually RECONNECT_AS_HOST happens on the new socket
+    // If the old socket is gone, it's already removed from members via disconnect
+    // So we just re-add the new one if missing, or update it.
+    // However, we might not have username/avatar here if we didn't send it.
+    // For simplicity, let's assume they might be missing or we use defaults/existing.
+    
+    // Better: Client should send username/avatar on reconnect too.
+    // If not, we just set a default "Host".
+    party.members.set(socket.id, { username: "Host", avatar: "👑" });
+    
     socket.join(partyId);
 
-    socket.emit("PARTY_STATE", { ...party, isHost: true });
+    socket.emit("PARTY_STATE", { ...party, isHost: true, size: party.members.size });
     broadcastPartySize(partyId);
+    broadcastMembersList(partyId);
 
     console.log("Host reclaimed party:", partyId);
+  });
+  
+  // ---------------- KICK USER (HOST ONLY) ----------------
+  socket.on("KICK_USER", ({ partyId, targetId }) => {
+    const party = getPartyOrError(socket, partyId);
+    if (!party || socket.id !== party.hostId) return;
+
+    if (!party.members.has(targetId)) return;
+    if (targetId === party.hostId) return; // Host can't kick self
+
+    const kickedUser = party.members.get(targetId);
+    
+    // Remove from party
+    party.members.delete(targetId);
+    party.votesToSkip.delete(targetId);
+
+    // Notify the kicked user
+    io.to(targetId).emit("KICKED", "You have been kicked by the host.");
+    
+    // Force disconnect their socket from the room
+    const targetSocket = io.sockets.sockets.get(targetId);
+    if (targetSocket) {
+      targetSocket.leave(partyId);
+    }
+
+    // Notify others
+    io.to(partyId).emit("INFO", `${kickedUser.username} was kicked.`);
+    broadcastPartySize(partyId);
+    broadcastMembersList(partyId);
+    emitVoteState(partyId, party);
   });
 
   // ---------------- CHANGE INDEX (HOST ONLY) ----------------
@@ -334,13 +395,15 @@ io.on("connection", (socket) => {
       party.votesToSkip.delete(socket.id);
 
       broadcastPartySize(partyId);
+      broadcastMembersList(partyId);
       emitVoteState(partyId, party);
 
       if (party.hostId === socket.id) {
-        const nextHost = [...party.members][0];
-        if (nextHost) {
-          party.hostId = nextHost;
-          io.to(partyId).emit("HOST_UPDATE", { hostId: nextHost });
+        const nextHostId = party.members.keys().next().value;
+        if (nextHostId) {
+          party.hostId = nextHostId;
+          io.to(partyId).emit("HOST_UPDATE", { hostId: nextHostId });
+          // Update the new host's local state or UI if needed, but IS_HOST logic on client handles it
         }
       }
     }
