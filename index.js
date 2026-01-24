@@ -12,6 +12,41 @@ const io = new Server(server, {
 // In-memory party store
 const parties = new Map();
 
+// ---- HTTP Routes ----
+app.get("/join/:partyId", (req, res) => {
+  const partyId = req.params.partyId;
+  const deepLink = `syncmusic://join/${partyId}`;
+  
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Join Sync Music Party</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>
+        body { background: #121212; color: white; font-family: sans-serif; text-align: center; padding: 50px 20px; }
+        .btn { display: inline-block; background: #03DAC6; color: black; padding: 15px 30px; text-decoration: none; border-radius: 30px; font-weight: bold; margin-top: 20px; }
+        p { color: #ccc; }
+      </style>
+    </head>
+    <body>
+      <h1>🎵 Sync Music</h1>
+      <p>Joining party: <strong>${partyId}</strong>...</p>
+      <a href="${deepLink}" class="btn">Open App</a>
+      <p style="font-size: 12px; margin-top: 30px;">If the app doesn't open automatically, click the button above.</p>
+      
+      <script>
+        // Attempt auto-redirect
+        setTimeout(function() {
+          window.location.href = "${deepLink}";
+        }, 1000);
+      </script>
+    </body>
+    </html>
+  `;
+  res.send(html);
+});
+
 // ---- Models ----
 function createParty(hostId, name, isPublic) {
   return {
@@ -148,16 +183,7 @@ io.on("connection", (socket) => {
     const party = parties.get(partyId);
     if (!party) return;
 
-    party.hostId = socket.id;
-    // We might need to update the socket ID in the members map if it changed
-    // But usually RECONNECT_AS_HOST happens on the new socket
-    // If the old socket is gone, it's already removed from members via disconnect
-    // So we just re-add the new one if missing, or update it.
-    // However, we might not have username/avatar here if we didn't send it.
-    // For simplicity, let's assume they might be missing or we use defaults/existing.
-    
-    // Better: Client should send username/avatar on reconnect too.
-    // If not, we just set a default "Host".
+    party.hostId = socket.id;s
     party.members.set(socket.id, { username: "Host", avatar: "👑" });
     
     socket.join(partyId);
