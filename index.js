@@ -123,6 +123,10 @@ function broadcastPartySize(partyId) {
 function broadcastMembersList(partyId) {
   const party = parties.get(partyId);
   if (!party) return;
+  
+  const room = io.sockets.adapter.rooms.get(partyId);
+  console.log(`[${partyId}] Broadcasting MEMBERS_LIST. App Members: ${party.members.size}, Socket Room Size: ${room ? room.size : 0}`);
+  
   io.to(partyId).emit("MEMBERS_LIST", getMembersList(party));
 }
 
@@ -142,6 +146,7 @@ io.on("connection", (socket) => {
 
     party.members.set(socket.id, { username, avatar });
     socket.join(party.id);
+    console.log(`[${party.id}] Host ${socket.id} joined room.`);
 
     socket.emit("PARTY_STATE", { 
       ...party, 
@@ -173,6 +178,7 @@ io.on("connection", (socket) => {
 
     party.members.set(socket.id, { username, avatar });
     socket.join(partyId);
+    console.log(`[${partyId}] Guest ${socket.id} joined room.`);
 
     socket.emit("PARTY_STATE", { 
       ...party, 
@@ -191,7 +197,7 @@ io.on("connection", (socket) => {
 
   // ---------------- HOST RECLAIM ----------------
   socket.on("RECONNECT_AS_HOST", ({ partyId }) => {
-    const party = parties.get(partyId);
+    const party = getPartyOrError(socket, partyId);
     if (!party) return;
 
     party.hostId = socket.id;
@@ -473,6 +479,7 @@ setInterval(() => {
       });
     }
     if (now - party.createdAt > 24 * 60 * 60 * 1000) {
+      io.to(id).emit("PARTY_ENDED", { message: "Party expired due to inactivity." });
       parties.delete(id);
     }
   }
