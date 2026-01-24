@@ -13,10 +13,12 @@ const io = new Server(server, {
 const parties = new Map();
 
 // ---- Models ----
-function createParty(hostId) {
+function createParty(hostId, name, isPublic) {
   return {
     id: uuidv4().slice(0, 6).toUpperCase(),
     hostId,
+    name: name || "Music Party",
+    isPublic: isPublic === true,
     queue: [],
     currentIndex: 0,
     isPlaying: false,
@@ -38,6 +40,22 @@ function getPartyOrError(socket, partyId) {
   }
   party.lastActiveAt = Date.now();
   return party;
+}
+
+function getPublicParties() {
+  const publicParties = [];
+  for (const party of parties.values()) {
+    if (party.isPublic) {
+      const currentTrack = party.queue[party.currentIndex];
+      publicParties.push({
+        id: party.id,
+        name: party.name,
+        memberCount: party.members.size,
+        nowPlaying: currentTrack ? currentTrack.title : "Nothing playing"
+      });
+    }
+  }
+  return publicParties;
 }
 
 function emitVoteState(partyId, party) {
@@ -63,8 +81,11 @@ io.on("connection", (socket) => {
   console.log("Connected:", socket.id);
 
   // ---------------- CREATE PARTY ----------------
-  socket.on("CREATE_PARTY", () => {
-    const party = createParty(socket.id);
+  socket.on("CREATE_PARTY", (data) => {
+    const name = data ? data.name : null;
+    const isPublic = data ? data.isPublic : false;
+    
+    const party = createParty(socket.id, name, isPublic);
     parties.set(party.id, party);
 
     party.members.add(socket.id);
@@ -73,7 +94,12 @@ io.on("connection", (socket) => {
     socket.emit("PARTY_STATE", { ...party, isHost: true });
     broadcastPartySize(party.id);
 
-    console.log("Party created:", party.id);
+    console.log(`Party created: ${party.id} (Public: ${party.isPublic})`);
+  });
+
+  // ---------------- GET PUBLIC PARTIES ----------------
+  socket.on("GET_PUBLIC_PARTIES", () => {
+    socket.emit("PUBLIC_PARTIES_LIST", getPublicParties());
   });
 
   // ---------------- JOIN PARTY ----------------
@@ -281,6 +307,19 @@ io.on("connection", (socket) => {
     io.to(partyId).emit("REACTION", {
       emoji,
       senderId: socket.id
+    });
+  });
+
+  // ---------------- CHAT ----------------
+  socket.on("SEND_MESSAGE", ({ partyId, message, username }) => {
+    if (!message || !message.trim()) return;
+    
+    io.to(partyId).emit("CHAT_MESSAGE", {
+      id: uuidv4(),
+      senderId: socket.id,
+      username: username || "Guest",
+      text: message.trim(),
+      timestamp: Date.now()
     });
   });
 
