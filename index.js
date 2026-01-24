@@ -77,6 +77,15 @@ function getPartyOrError(socket, partyId) {
   return party;
 }
 
+function getMembersList(party) {
+  return Array.from(party.members.entries()).map(([id, user]) => ({
+    id,
+    username: user.username,
+    avatar: user.avatar,
+    isHost: id === party.hostId
+  }));
+}
+
 function getPublicParties() {
   const publicParties = [];
   for (const party of parties.values()) {
@@ -114,15 +123,7 @@ function broadcastPartySize(partyId) {
 function broadcastMembersList(partyId) {
   const party = parties.get(partyId);
   if (!party) return;
-  
-  const membersList = Array.from(party.members.entries()).map(([id, user]) => ({
-    id,
-    username: user.username,
-    avatar: user.avatar,
-    isHost: id === party.hostId
-  }));
-
-  io.to(partyId).emit("MEMBERS_LIST", membersList);
+  io.to(partyId).emit("MEMBERS_LIST", getMembersList(party));
 }
 
 // ---- Socket Logic ----
@@ -142,7 +143,12 @@ io.on("connection", (socket) => {
     party.members.set(socket.id, { username, avatar });
     socket.join(party.id);
 
-    socket.emit("PARTY_STATE", { ...party, isHost: true, size: party.members.size });
+    socket.emit("PARTY_STATE", { 
+      ...party, 
+      isHost: true, 
+      size: party.members.size,
+      members: getMembersList(party)
+    });
     broadcastPartySize(party.id);
     broadcastMembersList(party.id);
 
@@ -168,7 +174,12 @@ io.on("connection", (socket) => {
     party.members.set(socket.id, { username, avatar });
     socket.join(partyId);
 
-    socket.emit("PARTY_STATE", { ...party, isHost: false, size: party.members.size });
+    socket.emit("PARTY_STATE", { 
+      ...party, 
+      isHost: false, 
+      size: party.members.size,
+      members: getMembersList(party)
+    });
 
     io.to(partyId).emit("INFO", `${username} joined the party`);
     broadcastPartySize(partyId);
@@ -183,12 +194,26 @@ io.on("connection", (socket) => {
     const party = parties.get(partyId);
     if (!party) return;
 
-    party.hostId = socket.id;s
+    party.hostId = socket.id;
+    // We might need to update the socket ID in the members map if it changed
+    // But usually RECONNECT_AS_HOST happens on the new socket
+    // If the old socket is gone, it's already removed from members via disconnect
+    // So we just re-add the new one if missing, or update it.
+    // However, we might not have username/avatar here if we didn't send it.
+    // For simplicity, let's assume they might be missing or we use defaults/existing.
+    
+    // Better: Client should send username/avatar on reconnect too.
+    // If not, we just set a default "Host".
     party.members.set(socket.id, { username: "Host", avatar: "👑" });
     
     socket.join(partyId);
 
-    socket.emit("PARTY_STATE", { ...party, isHost: true, size: party.members.size });
+    socket.emit("PARTY_STATE", { 
+      ...party, 
+      isHost: true, 
+      size: party.members.size,
+      members: getMembersList(party)
+    });
     broadcastPartySize(partyId);
     broadcastMembersList(partyId);
 
