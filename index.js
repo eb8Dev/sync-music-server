@@ -61,6 +61,7 @@ function createParty(hostId, name, isPublic) {
     elapsed: 0,
     votesToSkip: new Set(),
     members: new Map(), // socketId -> { username, avatar }
+    themeIndex: 0,
     createdAt: Date.now(),
     lastActiveAt: Date.now()
   };
@@ -130,6 +131,12 @@ function broadcastMembersList(partyId) {
   io.to(partyId).emit("MEMBERS_LIST", getMembersList(party));
 }
 
+function broadcastTheme(partyId) {
+  const party = parties.get(partyId);
+  if (!party) return;
+  io.to(partyId).emit("THEME_UPDATE", { themeIndex: party.themeIndex });
+}
+
 // ---- Socket Logic ----
 io.on("connection", (socket) => {
   console.log("Connected:", socket.id);
@@ -196,21 +203,18 @@ io.on("connection", (socket) => {
   });
 
   // ---------------- HOST RECLAIM ----------------
-  socket.on("RECONNECT_AS_HOST", ({ partyId }) => {
+  socket.on("RECONNECT_AS_HOST", (data) => {
+    const partyId = data.partyId;
+    const username = data.username || "Host";
+    const avatar = data.avatar || "👑";
+
     const party = getPartyOrError(socket, partyId);
     if (!party) return;
 
     party.hostId = socket.id;
-    // We might need to update the socket ID in the members map if it changed
-    // But usually RECONNECT_AS_HOST happens on the new socket
-    // If the old socket is gone, it's already removed from members via disconnect
-    // So we just re-add the new one if missing, or update it.
-    // However, we might not have username/avatar here if we didn't send it.
-    // For simplicity, let's assume they might be missing or we use defaults/existing.
     
-    // Better: Client should send username/avatar on reconnect too.
-    // If not, we just set a default "Host".
-    party.members.set(socket.id, { username: "Host", avatar: "👑" });
+    // Update or add host member entry
+    party.members.set(socket.id, { username, avatar });
     
     socket.join(partyId);
 
@@ -254,6 +258,15 @@ io.on("connection", (socket) => {
     broadcastPartySize(partyId);
     broadcastMembersList(partyId);
     emitVoteState(partyId, party);
+  });
+
+  // ---------------- CHANGE THEME (HOST ONLY) ----------------
+  socket.on("CHANGE_THEME", ({ partyId, themeIndex }) => {
+    const party = getPartyOrError(socket, partyId);
+    if (!party || socket.id !== party.hostId) return;
+
+    party.themeIndex = themeIndex;
+    broadcastTheme(partyId);
   });
 
   // ---------------- CHANGE INDEX (HOST ONLY) ----------------
