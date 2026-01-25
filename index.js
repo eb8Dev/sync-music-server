@@ -90,61 +90,101 @@ async function restoreParties() {
 app.get("/join/:partyId", (req, res) => {
   const partyId = req.params.partyId;
   const deepLink = `syncmusic://join/${partyId}`;
-  const apkUrl = "https://github.com/eb8dev/sync-music/downloads/syncmusic-latest.apk"; // 👈 APK URL
+
+  const apks = {
+    universal:
+      "https://github.com/eb8Dev/sync_music/releases/download/v1.0.0/SyncMusic-1.0.0-universal.apk",
+    arm64:
+      "https://github.com/eb8Dev/sync_music/releases/download/v1.0.0/SyncMusic-1.0.0-arm64.apk",
+    armeabi:
+      "https://github.com/eb8Dev/sync_music/releases/download/v1.0.0/SyncMusic-1.0.0-armeabi-v7a.apk",
+  };
 
   const html = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>Join Sync Music Party</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <style>
-        body {
-          background: #121212;
-          color: white;
-          font-family: sans-serif;
-          text-align: center;
-          padding: 50px 20px;
-        }
-        .btn {
-          display: block;
-          max-width: 280px;
-          margin: 15px auto;
-          background: #03DAC6;
-          color: black;
-          padding: 15px 30px;
-          text-decoration: none;
-          border-radius: 30px;
-          font-weight: bold;
-        }
-        .btn.secondary {
-          background: #333;
-          color: white;
-          border: 1px solid #444;
-        }
-        p { color: #ccc; }
-      </style>
-    </head>
-    <body>
-      <h1>🎵 Sync Music</h1>
-      <p>Joining party: <strong>${partyId}</strong></p>
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Join Sync Music Party</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      background: #121212;
+      color: white;
+      font-family: sans-serif;
+      text-align: center;
+      padding: 40px 20px;
+    }
+    .btn {
+      display: block;
+      max-width: 320px;
+      margin: 12px auto;
+      background: #03DAC6;
+      color: black;
+      padding: 14px 24px;
+      text-decoration: none;
+      border-radius: 30px;
+      font-weight: bold;
+    }
+    .btn.secondary {
+      background: #333;
+      color: white;
+      border: 1px solid #444;
+    }
+    .apk-list {
+      margin-top: 30px;
+    }
+    .apk-note {
+      font-size: 13px;
+      color: #bbb;
+      max-width: 340px;
+      margin: 0 auto 10px;
+    }
+    h2 {
+      margin-top: 40px;
+      font-size: 18px;
+    }
+    p {
+      color: #ccc;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎵 Sync Music</h1>
+  <p>Joining party: <strong>${partyId}</strong></p>
 
-      <a href="${deepLink}" class="btn">Open App</a>
-      <a href="${apkUrl}" class="btn secondary">Install App (APK)</a>
+  <a href="${deepLink}" class="btn">Open App</a>
 
-      <p style="font-size: 12px; margin-top: 30px;">
-        If the app doesn’t open automatically, tap <strong>Open App</strong>.<br>
-        If you don’t have the app installed, install it first.
-      </p>
+  <h2>Install Sync Music</h2>
+  <p class="apk-note">
+    Not installed yet? Download the APK below.<br>
+    <strong>Universal APK is recommended</strong> for most users.
+  </p>
 
-      <script>
-        setTimeout(function () {
-          window.location.href = "${deepLink}";
-        }, 1000);
-      </script>
-    </body>
-    </html>
-  `;
+  <div class="apk-list">
+    <a href="${apks.universal}" class="btn secondary">
+      ⬇️ Universal APK (Recommended)
+    </a>
+    <a href="${apks.arm64}" class="btn secondary">
+      ⬇️ ARM64 (Most modern phones)
+    </a>
+    <a href="${apks.armeabi}" class="btn secondary">
+      ⬇️ ARM (Older devices)
+    </a>
+  </div>
+
+  <p style="font-size: 12px; margin-top: 30px;">
+    Android may show a security warning — this is normal for sideloaded apps.<br>
+    After installation, return here and tap <strong>Open App</strong>.
+  </p>
+
+  <script>
+    setTimeout(function () {
+      window.location.href = "${deepLink}";
+    }, 1000);
+  </script>
+</body>
+</html>
+`;
 
   res.send(html);
 });
