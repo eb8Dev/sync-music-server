@@ -5,7 +5,6 @@ const { v4: uuidv4 } = require("uuid");
 const admin = require("firebase-admin");
 
 // ---- FIREBASE SETUP ----
-// Expects FIREBASE_SERVICE_ACCOUNT env var or default google credentials
 try {
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -36,7 +35,6 @@ const parties = new Map();
 async function saveParty(party) {
   if (!db) return;
   try {
-    // Convert complex types to JSON-friendly format
     const docData = {
       ...party,
       votesToSkip: Array.from(party.votesToSkip),
@@ -68,15 +66,10 @@ async function restoreParties() {
     snapshot.forEach(doc => {
       const data = doc.data();
       // Rehydrate Sets and Maps
-      data.votesToSkip = new Set(data.votesToSkip || []);
+      data.votesToSkip = new Set(); // Clear votes on restart
+      data.members = new Map();     // Clear members (socket IDs invalid)
+      data.isPlaying = false;       // Pause playback
       
-      // Rehydrate members Map
-      const membersMap = new Map();
-      if (data.members) {
-        Object.entries(data.members).forEach(([key, val]) => membersMap.set(key, val));
-      }
-      data.members = membersMap;
-
       parties.set(data.id, data);
     });
     console.log(`Restored ${parties.size} parties.`);
@@ -103,16 +96,13 @@ app.get("/join/:partyId", (req, res) => {
       </style>
     </head>
     <body>
-      <h1>🎵 Sync Music</h1>
+      <h1>🎵 Sync Music by eb</h1>
       <p>Joining party: <strong>${partyId}</strong>...</p>
       <a href="${deepLink}" class="btn">Open App</a>
       <p style="font-size: 12px; margin-top: 30px;">If the app doesn't open automatically, click the button above.</p>
       
       <script>
-        // Attempt auto-redirect
-        setTimeout(function() {
-          window.location.href = "${deepLink}";
-        }, 1000);
+        setTimeout(function() { window.location.href = "${deepLink}"; }, 1000);
       </script>
     </body>
     </html>
@@ -133,7 +123,7 @@ function createParty(hostId, name, isPublic) {
     startedAt: null,
     elapsed: 0,
     votesToSkip: new Set(),
-    members: new Map(), // socketId -> { username, avatar }
+    members: new Map(),
     themeIndex: 0,
     createdAt: Date.now(),
     lastActiveAt: Date.now()
@@ -148,9 +138,7 @@ function getPartyOrError(socket, partyId) {
     return null;
   }
   party.lastActiveAt = Date.now();
-  // Async save on activity is optional but good for lastActiveAt updates
-  // avoiding await to not block socket loop
-  saveParty(party); 
+  saveParty(party);
   return party;
 }
 
@@ -182,7 +170,7 @@ function getPublicParties() {
 function emitVoteState(partyId, party) {
   const size = party.members.size;
   const enabled = size >= 5;
-  const required = enabled ? Math.ceil(size * 0.5) : 0;
+  const required = enabled ? Math.ceil(size * 0.5) : 0; // 50% Threshold
 
   io.to(partyId).emit("VOTE_UPDATE", {
     votes: party.votesToSkip.size,
@@ -200,10 +188,6 @@ function broadcastPartySize(partyId) {
 function broadcastMembersList(partyId) {
   const party = parties.get(partyId);
   if (!party) return;
-  
-  const room = io.sockets.adapter.rooms.get(partyId);
-  console.log(`[${partyId}] Broadcasting MEMBERS_LIST. App Members: ${party.members.size}, Socket Room Size: ${room ? room.size : 0}`);
-  
   io.to(partyId).emit("MEMBERS_LIST", getMembersList(party));
 }
 
@@ -229,7 +213,6 @@ io.on("connection", (socket) => {
 
     party.members.set(socket.id, { username, avatar });
     await socket.join(party.id);
-    console.log(`[${party.id}] Host ${socket.id} joined room.`);
 
     socket.emit("PARTY_STATE", { 
       ...party, 
@@ -239,10 +222,7 @@ io.on("connection", (socket) => {
     });
     broadcastPartySize(party.id);
     broadcastMembersList(party.id);
-    
     saveParty(party);
-
-    console.log(`Party created: ${party.id} (Public: ${party.isPublic})`);
   });
 
   // ---------------- GET PUBLIC PARTIES ----------------
@@ -253,17 +233,14 @@ io.on("connection", (socket) => {
   // ---------------- JOIN PARTY ----------------
   socket.on("JOIN_PARTY", async (data) => {
     const partyId = typeof data === "string" ? data : data.partyId;
-    const username =
-      typeof data === "object" && data.username ? data.username : "Guest";
-    const avatar =
-      typeof data === "object" && data.avatar ? data.avatar : "👤";
+    const username = typeof data === "object" && data.username ? data.username : "Guest";
+    const avatar = typeof data === "object" && data.avatar ? data.avatar : "👤";
 
     const party = getPartyOrError(socket, partyId);
     if (!party) return;
 
     party.members.set(socket.id, { username, avatar });
     await socket.join(partyId);
-    console.log(`[${partyId}] Guest ${socket.id} joined room.`);
 
     socket.emit("PARTY_STATE", { 
       ...party, 
@@ -276,10 +253,7 @@ io.on("connection", (socket) => {
     broadcastPartySize(partyId);
     broadcastMembersList(partyId);
     emitVoteState(partyId, party);
-    
     saveParty(party);
-
-    console.log("User joined party:", partyId, socket.id);
   });
 
   // ---------------- HOST RECLAIM ----------------
@@ -292,10 +266,7 @@ io.on("connection", (socket) => {
     if (!party) return;
 
     party.hostId = socket.id;
-    
-    // Update or add host member entry
     party.members.set(socket.id, { username, avatar });
-    
     await socket.join(partyId);
 
     socket.emit("PARTY_STATE", { 
@@ -306,45 +277,33 @@ io.on("connection", (socket) => {
     });
     broadcastPartySize(partyId);
     broadcastMembersList(partyId);
-    
     saveParty(party);
-
-    console.log("Host reclaimed party:", partyId);
   });
   
-  // ---------------- KICK USER (HOST ONLY) ----------------
+  // ---------------- KICK USER ----------------
   socket.on("KICK_USER", ({ partyId, targetId }) => {
     const party = getPartyOrError(socket, partyId);
     if (!party || socket.id !== party.hostId) return;
 
     if (!party.members.has(targetId)) return;
-    if (targetId === party.hostId) return; // Host can't kick self
+    if (targetId === party.hostId) return;
 
     const kickedUser = party.members.get(targetId);
-    
-    // Remove from party
     party.members.delete(targetId);
     party.votesToSkip.delete(targetId);
 
-    // Notify the kicked user
     io.to(targetId).emit("KICKED", "You have been kicked by the host.");
-    
-    // Force disconnect their socket from the room
     const targetSocket = io.sockets.sockets.get(targetId);
-    if (targetSocket) {
-      targetSocket.leave(partyId);
-    }
+    if (targetSocket) targetSocket.leave(partyId);
 
-    // Notify others
     io.to(partyId).emit("INFO", `${kickedUser.username} was kicked.`);
     broadcastPartySize(partyId);
     broadcastMembersList(partyId);
     emitVoteState(partyId, party);
-    
     saveParty(party);
   });
 
-  // ---------------- CHANGE THEME (HOST ONLY) ----------------
+  // ---------------- CHANGE THEME ----------------
   socket.on("CHANGE_THEME", ({ partyId, themeIndex }) => {
     const party = getPartyOrError(socket, partyId);
     if (!party || socket.id !== party.hostId) return;
@@ -354,7 +313,7 @@ io.on("connection", (socket) => {
     saveParty(party);
   });
 
-  // ---------------- CHANGE INDEX (HOST ONLY) ----------------
+  // ---------------- CHANGE INDEX ----------------
   socket.on("CHANGE_INDEX", ({ partyId, newIndex }) => {
     const party = getPartyOrError(socket, partyId);
     if (!party || socket.id !== party.hostId) return;
@@ -367,12 +326,7 @@ io.on("connection", (socket) => {
     party.votesToSkip.clear();
 
     emitVoteState(partyId, party);
-
-    io.to(partyId).emit("PLAYBACK_UPDATE", {
-      isPlaying: true,
-      startedAt: party.startedAt,
-      currentIndex: party.currentIndex
-    });
+    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: true, startedAt: party.startedAt, currentIndex: party.currentIndex });
     saveParty(party);
   });
 
@@ -393,7 +347,7 @@ io.on("connection", (socket) => {
     saveParty(party);
   });
 
-  // ---------------- REMOVE TRACK (HOST ONLY) ----------------
+  // ---------------- REMOVE TRACK ----------------
   socket.on("REMOVE_TRACK", ({ partyId, trackId }) => {
     const party = getPartyOrError(socket, partyId);
     if (!party || socket.id !== party.hostId) return;
@@ -408,17 +362,10 @@ io.on("connection", (socket) => {
     }
 
     party.queue.splice(index, 1);
-
-    if (party.currentIndex > party.queue.length) {
-      party.currentIndex = party.queue.length;
-    }
+    if (party.currentIndex > party.queue.length) party.currentIndex = party.queue.length;
 
     io.to(partyId).emit("QUEUE_UPDATED", party.queue);
-    io.to(partyId).emit("PLAYBACK_UPDATE", {
-      isPlaying: party.isPlaying,
-      startedAt: party.startedAt,
-      currentIndex: party.currentIndex
-    });
+    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: party.isPlaying, startedAt: party.startedAt, currentIndex: party.currentIndex });
     saveParty(party);
   });
 
@@ -433,9 +380,9 @@ io.on("connection", (socket) => {
     party.votesToSkip.add(socket.id);
     emitVoteState(partyId, party);
 
-    const required = Math.ceil(size * 0.5);
+    const required = Math.ceil(size * 0.5); // 50% Threshold
     if (party.votesToSkip.size < required) {
-      saveParty(party); // Save votes update
+      saveParty(party);
       return;
     }
 
@@ -450,30 +397,19 @@ io.on("connection", (socket) => {
     }
 
     emitVoteState(partyId, party);
-
-    io.to(partyId).emit("PLAYBACK_UPDATE", {
-      isPlaying: party.isPlaying,
-      startedAt: party.startedAt,
-      currentIndex: party.currentIndex
-    });
-
+    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: party.isPlaying, startedAt: party.startedAt, currentIndex: party.currentIndex });
     io.to(partyId).emit("INFO", "Skipped by vote!");
     saveParty(party);
   });
 
-  // ---------------- PLAY / PAUSE / TRACK ENDED ----------------
+  // ---------------- PLAY / PAUSE / ENDED ----------------
   socket.on("PLAY", ({ partyId }) => {
     const party = getPartyOrError(socket, partyId);
     if (!party || socket.id !== party.hostId) return;
 
     party.isPlaying = true;
     party.startedAt = Date.now() - (party.elapsed || 0);
-
-    io.to(partyId).emit("PLAYBACK_UPDATE", {
-      isPlaying: true,
-      startedAt: party.startedAt,
-      currentIndex: party.currentIndex
-    });
+    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: true, startedAt: party.startedAt, currentIndex: party.currentIndex });
     saveParty(party);
   });
 
@@ -483,7 +419,6 @@ io.on("connection", (socket) => {
 
     party.isPlaying = false;
     party.elapsed = Date.now() - party.startedAt;
-
     io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: false });
     saveParty(party);
   });
@@ -495,7 +430,6 @@ io.on("connection", (socket) => {
     party.currentIndex++;
     party.elapsed = 0;
     party.votesToSkip.clear();
-
     emitVoteState(partyId, party);
 
     if (party.currentIndex >= party.queue.length) {
@@ -505,11 +439,7 @@ io.on("connection", (socket) => {
       party.startedAt = Date.now();
     }
 
-    io.to(partyId).emit("PLAYBACK_UPDATE", {
-      isPlaying: party.isPlaying,
-      startedAt: party.startedAt,
-      currentIndex: party.currentIndex
-    });
+    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: party.isPlaying, startedAt: party.startedAt, currentIndex: party.currentIndex });
     saveParty(party);
   });
 
@@ -518,64 +448,43 @@ io.on("connection", (socket) => {
     const party = parties.get(partyId);
     if (!party || party.hostId !== socket.id) return;
 
-    io.to(partyId).emit("PARTY_ENDED", {
-      message: "The host has ended the party."
-    });
-
+    io.to(partyId).emit("PARTY_ENDED", { message: "The host has ended the party." });
     parties.delete(partyId);
     removeParty(partyId);
   });
 
   // ---------------- REACTIONS ----------------
   socket.on("SEND_REACTION", ({ partyId, emoji }) => {
-    const allowed = ["🔥", "❤️", "🎉", "😂", "👋", "💃"];
-    if (!allowed.includes(emoji)) return;
-
-    io.to(partyId).emit("REACTION", {
-      emoji,
-      senderId: socket.id
-    });
-    // Reactions are ephemeral, no save needed
+    io.to(partyId).emit("REACTION", { emoji, senderId: socket.id });
   });
 
   // ---------------- CHAT ----------------
   socket.on("SEND_MESSAGE", ({ partyId, message, username }) => {
     if (!message || !message.trim()) return;
-    
-    io.to(partyId).emit("CHAT_MESSAGE", {
-      id: uuidv4(),
-      senderId: socket.id,
-      username: username || "Guest",
-      text: message.trim(),
-      timestamp: Date.now()
-    });
-    // Chat persistence optional. For now, skipping to keep document size low.
-    // If needed: party.messages.push(msg); saveParty(party);
+    io.to(partyId).emit("CHAT_MESSAGE", { id: uuidv4(), senderId: socket.id, username, text: message.trim(), timestamp: Date.now() });
   });
 
   // ---------------- DISCONNECT ----------------
   socket.on("disconnect", () => {
     console.log("Disconnected:", socket.id);
-
     for (const [partyId, party] of parties) {
-      if (!party.members.has(socket.id)) continue;
+      if (party.members.has(socket.id)) {
+        party.members.delete(socket.id);
+        party.votesToSkip.delete(socket.id);
 
-      party.members.delete(socket.id);
-      party.votesToSkip.delete(socket.id);
+        broadcastPartySize(partyId);
+        broadcastMembersList(partyId);
+        emitVoteState(partyId, party);
 
-      broadcastPartySize(partyId);
-      broadcastMembersList(partyId);
-      emitVoteState(partyId, party);
-
-      if (party.hostId === socket.id) {
-        const nextHostId = party.members.keys().next().value;
-        if (nextHostId) {
-          party.hostId = nextHostId;
-          io.to(partyId).emit("HOST_UPDATE", { hostId: nextHostId });
-          // Update the new host's local state or UI if needed, but IS_HOST logic on client handles it
+        if (party.hostId === socket.id) {
+          const nextHostId = party.members.keys().next().value;
+          if (nextHostId) {
+            party.hostId = nextHostId;
+            io.to(partyId).emit("HOST_UPDATE", { hostId: nextHostId });
+          }
         }
+        saveParty(party);
       }
-      saveParty(party);
     }
   });
 });
@@ -585,13 +494,9 @@ setInterval(() => {
   const now = Date.now();
   for (const [id, party] of parties) {
     if (party.isPlaying) {
-      io.to(id).emit("SYNC", {
-        serverTime: now,
-        startedAt: party.startedAt,
-        currentIndex: party.currentIndex
-      });
+      io.to(id).emit("SYNC", { serverTime: now, startedAt: party.startedAt, currentIndex: party.currentIndex });
     }
-    if (now - party.createdAt > 24 * 60 * 60 * 1000) {
+    if (now - party.lastActiveAt > 24 * 60 * 60 * 1000) {
       io.to(id).emit("PARTY_ENDED", { message: "Party expired due to inactivity." });
       parties.delete(id);
       removeParty(id);
