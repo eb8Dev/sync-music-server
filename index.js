@@ -1,7 +1,27 @@
-const express = require("express");
+﻿const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const { v4: uuidv4 } = require("uuid");
+const admin = require("firebase-admin");
+
+// ---- FIREBASE SETUP ----
+// Expects FIREBASE_SERVICE_ACCOUNT env var or default google credentials
+try {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+  } else {
+    admin.initializeApp();
+  }
+  console.log("Firebase Admin initialized.");
+} catch (e) {
+  console.warn("Firebase Admin failed to initialize. Persistence disabled.", e.message);
+}
+
+const db = admin.firestore ? admin.firestore() : null;
+const PARTIES_COLLECTION = "active_parties";
 
 const app = express();
 const server = http.createServer(app);
@@ -11,6 +31,59 @@ const io = new Server(server, {
 
 // In-memory party store
 const parties = new Map();
+
+// ---- PERSISTENCE HELPERS ----
+async function saveParty(party) {
+  if (!db) return;
+  try {
+    // Convert complex types to JSON-friendly format
+    const docData = {
+      ...party,
+      votesToSkip: Array.from(party.votesToSkip),
+      members: Object.fromEntries(party.members),
+      lastActiveAt: Date.now()
+    };
+    await db.collection(PARTIES_COLLECTION).doc(party.id).set(docData);
+  } catch (e) {
+    console.error(`Failed to save party ${party.id}:`, e.message);
+  }
+}
+
+async function removeParty(partyId) {
+  if (!db) return;
+  try {
+    await db.collection(PARTIES_COLLECTION).doc(partyId).delete();
+  } catch (e) {
+    console.error(`Failed to remove party ${partyId}:`, e.message);
+  }
+}
+
+async function restoreParties() {
+  if (!db) return;
+  console.log("Restoring parties from Firestore...");
+  try {
+    const snapshot = await db.collection(PARTIES_COLLECTION).get();
+    if (snapshot.empty) return;
+
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      // Rehydrate Sets and Maps
+      data.votesToSkip = new Set(data.votesToSkip || []);
+      
+      // Rehydrate members Map
+      const membersMap = new Map();
+      if (data.members) {
+        Object.entries(data.members).forEach(([key, val]) => membersMap.set(key, val));
+      }
+      data.members = membersMap;
+
+      parties.set(data.id, data);
+    });
+    console.log(`Restored ${parties.size} parties.`);
+  } catch (e) {
+    console.error("Failed to restore parties:", e.message);
+  }
+}
 
 // ---- HTTP Routes ----
 app.get("/join/:partyId", (req, res) => {
@@ -75,6 +148,9 @@ function getPartyOrError(socket, partyId) {
     return null;
   }
   party.lastActiveAt = Date.now();
+  // Async save on activity is optional but good for lastActiveAt updates
+  // avoiding await to not block socket loop
+  saveParty(party); 
   return party;
 }
 
@@ -106,7 +182,7 @@ function getPublicParties() {
 function emitVoteState(partyId, party) {
   const size = party.members.size;
   const enabled = size >= 5;
-  const required = enabled ? Math.ceil(size * 0.8) : 0;
+  const required = enabled ? Math.ceil(size * 0.5) : 0;
 
   io.to(partyId).emit("VOTE_UPDATE", {
     votes: party.votesToSkip.size,
@@ -142,7 +218,7 @@ io.on("connection", (socket) => {
   console.log("Connected:", socket.id);
 
   // ---------------- CREATE PARTY ----------------
-  socket.on("CREATE_PARTY", (data) => {
+  socket.on("CREATE_PARTY", async (data) => {
     const name = data ? data.name : null;
     const isPublic = data ? data.isPublic : false;
     const username = data ? data.username : "Host";
@@ -152,7 +228,7 @@ io.on("connection", (socket) => {
     parties.set(party.id, party);
 
     party.members.set(socket.id, { username, avatar });
-    socket.join(party.id);
+    await socket.join(party.id);
     console.log(`[${party.id}] Host ${socket.id} joined room.`);
 
     socket.emit("PARTY_STATE", { 
@@ -163,6 +239,8 @@ io.on("connection", (socket) => {
     });
     broadcastPartySize(party.id);
     broadcastMembersList(party.id);
+    
+    saveParty(party);
 
     console.log(`Party created: ${party.id} (Public: ${party.isPublic})`);
   });
@@ -173,7 +251,7 @@ io.on("connection", (socket) => {
   });
 
   // ---------------- JOIN PARTY ----------------
-  socket.on("JOIN_PARTY", (data) => {
+  socket.on("JOIN_PARTY", async (data) => {
     const partyId = typeof data === "string" ? data : data.partyId;
     const username =
       typeof data === "object" && data.username ? data.username : "Guest";
@@ -184,7 +262,7 @@ io.on("connection", (socket) => {
     if (!party) return;
 
     party.members.set(socket.id, { username, avatar });
-    socket.join(partyId);
+    await socket.join(partyId);
     console.log(`[${partyId}] Guest ${socket.id} joined room.`);
 
     socket.emit("PARTY_STATE", { 
@@ -198,12 +276,14 @@ io.on("connection", (socket) => {
     broadcastPartySize(partyId);
     broadcastMembersList(partyId);
     emitVoteState(partyId, party);
+    
+    saveParty(party);
 
     console.log("User joined party:", partyId, socket.id);
   });
 
   // ---------------- HOST RECLAIM ----------------
-  socket.on("RECONNECT_AS_HOST", (data) => {
+  socket.on("RECONNECT_AS_HOST", async (data) => {
     const partyId = data.partyId;
     const username = data.username || "Host";
     const avatar = data.avatar || "👑";
@@ -216,7 +296,7 @@ io.on("connection", (socket) => {
     // Update or add host member entry
     party.members.set(socket.id, { username, avatar });
     
-    socket.join(partyId);
+    await socket.join(partyId);
 
     socket.emit("PARTY_STATE", { 
       ...party, 
@@ -226,6 +306,8 @@ io.on("connection", (socket) => {
     });
     broadcastPartySize(partyId);
     broadcastMembersList(partyId);
+    
+    saveParty(party);
 
     console.log("Host reclaimed party:", partyId);
   });
@@ -258,6 +340,8 @@ io.on("connection", (socket) => {
     broadcastPartySize(partyId);
     broadcastMembersList(partyId);
     emitVoteState(partyId, party);
+    
+    saveParty(party);
   });
 
   // ---------------- CHANGE THEME (HOST ONLY) ----------------
@@ -267,6 +351,7 @@ io.on("connection", (socket) => {
 
     party.themeIndex = themeIndex;
     broadcastTheme(partyId);
+    saveParty(party);
   });
 
   // ---------------- CHANGE INDEX (HOST ONLY) ----------------
@@ -288,6 +373,7 @@ io.on("connection", (socket) => {
       startedAt: party.startedAt,
       currentIndex: party.currentIndex
     });
+    saveParty(party);
   });
 
   // ---------------- ADD TRACK ----------------
@@ -304,6 +390,7 @@ io.on("connection", (socket) => {
     });
 
     io.to(partyId).emit("QUEUE_UPDATED", party.queue);
+    saveParty(party);
   });
 
   // ---------------- REMOVE TRACK (HOST ONLY) ----------------
@@ -332,6 +419,7 @@ io.on("connection", (socket) => {
       startedAt: party.startedAt,
       currentIndex: party.currentIndex
     });
+    saveParty(party);
   });
 
   // ---------------- VOTE SKIP ----------------
@@ -345,8 +433,11 @@ io.on("connection", (socket) => {
     party.votesToSkip.add(socket.id);
     emitVoteState(partyId, party);
 
-    const required = Math.ceil(size * 0.8);
-    if (party.votesToSkip.size < required) return;
+    const required = Math.ceil(size * 0.5);
+    if (party.votesToSkip.size < required) {
+      saveParty(party); // Save votes update
+      return;
+    }
 
     party.votesToSkip.clear();
 
@@ -367,6 +458,7 @@ io.on("connection", (socket) => {
     });
 
     io.to(partyId).emit("INFO", "Skipped by vote!");
+    saveParty(party);
   });
 
   // ---------------- PLAY / PAUSE / TRACK ENDED ----------------
@@ -382,6 +474,7 @@ io.on("connection", (socket) => {
       startedAt: party.startedAt,
       currentIndex: party.currentIndex
     });
+    saveParty(party);
   });
 
   socket.on("PAUSE", ({ partyId }) => {
@@ -392,6 +485,7 @@ io.on("connection", (socket) => {
     party.elapsed = Date.now() - party.startedAt;
 
     io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: false });
+    saveParty(party);
   });
 
   socket.on("TRACK_ENDED", ({ partyId }) => {
@@ -416,6 +510,7 @@ io.on("connection", (socket) => {
       startedAt: party.startedAt,
       currentIndex: party.currentIndex
     });
+    saveParty(party);
   });
 
   // ---------------- END PARTY ----------------
@@ -428,6 +523,7 @@ io.on("connection", (socket) => {
     });
 
     parties.delete(partyId);
+    removeParty(partyId);
   });
 
   // ---------------- REACTIONS ----------------
@@ -439,6 +535,7 @@ io.on("connection", (socket) => {
       emoji,
       senderId: socket.id
     });
+    // Reactions are ephemeral, no save needed
   });
 
   // ---------------- CHAT ----------------
@@ -452,6 +549,8 @@ io.on("connection", (socket) => {
       text: message.trim(),
       timestamp: Date.now()
     });
+    // Chat persistence optional. For now, skipping to keep document size low.
+    // If needed: party.messages.push(msg); saveParty(party);
   });
 
   // ---------------- DISCONNECT ----------------
@@ -476,6 +575,7 @@ io.on("connection", (socket) => {
           // Update the new host's local state or UI if needed, but IS_HOST logic on client handles it
         }
       }
+      saveParty(party);
     }
   });
 });
@@ -494,11 +594,13 @@ setInterval(() => {
     if (now - party.createdAt > 24 * 60 * 60 * 1000) {
       io.to(id).emit("PARTY_ENDED", { message: "Party expired due to inactivity." });
       parties.delete(id);
+      removeParty(id);
     }
   }
 }, 5000);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log("Server running on port", PORT);
+  await restoreParties();
 });
