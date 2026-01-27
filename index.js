@@ -90,22 +90,15 @@ async function restoreParties() {
 app.get("/join/:partyId", (req, res) => {
   const partyId = req.params.partyId;
   const deepLink = `syncmusic://join/${partyId}`;
-
-  const apks = {
-    universal:
-      "https://github.com/eb8Dev/sync_music/releases/download/v1.0.0/SyncMusic-1.0.0-universal.apk",
-    arm64:
-      "https://github.com/eb8Dev/sync_music/releases/download/v1.0.0/SyncMusic-1.0.0-arm64.apk",
-    armeabi:
-      "https://github.com/eb8Dev/sync_music/releases/download/v1.0.0/SyncMusic-1.0.0-armeabi-v7a.apk",
-  };
+  const formLink = "https://forms.gle/8QbDmnZd2rXEk5W47";
 
   const html = `
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Join Sync Music Party</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body {
       background: #121212;
@@ -130,64 +123,72 @@ app.get("/join/:partyId", (req, res) => {
       color: white;
       border: 1px solid #444;
     }
-    .apk-list {
-      margin-top: 30px;
-    }
-    .apk-note {
-      font-size: 13px;
-      color: #bbb;
-      max-width: 340px;
-      margin: 0 auto 10px;
-    }
     h2 {
       margin-top: 40px;
       font-size: 18px;
     }
     p {
       color: #ccc;
+      max-width: 360px;
+      margin: 0 auto 10px;
+    }
+    .note {
+      font-size: 13px;
+      color: #aaa;
+      margin-top: 20px;
     }
   </style>
 </head>
 <body>
+
   <h1>🎵 Sync Music</h1>
   <p>Joining party: <strong>${partyId}</strong></p>
 
-  <a href="${deepLink}" class="btn">Open App</a>
+  <a href="${deepLink}" class="btn">
+    Open Sync Music App
+  </a>
 
-  <h2>Install Sync Music</h2>
-  <p class="apk-note">
-    Not installed yet? Download the APK below.<br>
-    <strong>Universal APK is recommended</strong> for most users.
+  <h2>Not in Closed Testing Yet?</h2>
+  <p>
+    Sync Music is currently in <strong>Google Play Closed Testing</strong>.<br>
+    Fill out the form below to get access.
   </p>
 
-  <div class="apk-list">
-    <a href="${apks.universal}" class="btn secondary">
-      ⬇️ Universal APK (Recommended)
-    </a>
-    <a href="${apks.arm64}" class="btn secondary">
-      ⬇️ ARM64 (Most modern phones)
-    </a>
-    <a href="${apks.armeabi}" class="btn secondary">
-      ⬇️ ARM (Older devices)
-    </a>
-  </div>
+  <a href="${formLink}" class="btn secondary" target="_blank">
+    📝 Join Closed Testing
+  </a>
 
-  <p style="font-size: 12px; margin-top: 30px;">
-    Android may show a security warning — this is normal for sideloaded apps.<br>
-    After installation, return here and tap <strong>Open App</strong>.
+  <p class="note">
+    Once approved, install the app from Play Store and return here to join the party.
   </p>
+
+  <!-- Deep link reliability for Android browsers -->
+  <iframe src="${deepLink}" style="display:none;"></iframe>
 
   <script>
+    let userInteracted = false;
+
+    document.querySelectorAll('a').forEach(link => {
+      link.addEventListener('click', () => {
+        userInteracted = true;
+      });
+    });
+
+    // Auto-attempt app open
     setTimeout(function () {
-      window.location.href = "${deepLink}";
-    }, 1000);
+      if (!userInteracted) {
+        window.location.href = "${deepLink}";
+      }
+    }, 2000);
   </script>
+
 </body>
 </html>
 `;
 
   res.send(html);
 });
+
 
 // ---- Models ----
 function createParty(hostSocketId, hostUserId, name, isPublic) {
