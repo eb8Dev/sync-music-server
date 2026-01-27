@@ -5,22 +5,43 @@ const { v4: uuidv4 } = require("uuid");
 const admin = require("firebase-admin");
 
 // ---- FIREBASE SETUP ----
+const fs = require('fs');
+const path = require('path');
+
 try {
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    // 1. Try Environment Variable (Production/Render)
     const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });
+    console.log("✅ Firebase Admin initialized via Environment Variable.");
+  } else if (fs.existsSync(path.join(__dirname, 'serviceAccountKey.json'))) {
+    // 2. Try Local File (Development)
+    const serviceAccount = require('./serviceAccountKey.json');
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    console.log("✅ Firebase Admin initialized via local serviceAccountKey.json.");
   } else {
+    // 3. Try Default Credentials (Google Cloud)
     admin.initializeApp();
+    console.log("⚠️ Attempting Firebase Admin initialization via Default Credentials...");
   }
-  console.log("Firebase Admin initialized.");
 } catch (e) {
-  console.warn("Firebase Admin failed to initialize. Persistence disabled.", e.message);
+  console.error("❌ Firebase Admin failed to initialize. Persistence is DISABLED.", e.message);
 }
 
-const db = admin.firestore ? admin.firestore() : null;
+const db = admin.apps.length ? admin.firestore() : null; // Check if app initialized
 const PARTIES_COLLECTION = "active_parties";
+
+if (!db) {
+    console.warn("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+    console.warn("WARNING: Database is NOT connected.");
+    console.warn("All parties will be lost when the server restarts.");
+    console.warn("To fix: Set FIREBASE_SERVICE_ACCOUNT env var or add serviceAccountKey.json");
+    console.warn("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -57,7 +78,10 @@ async function removeParty(partyId) {
 }
 
 async function restoreParties() {
-  if (!db) return;
+  if (!db) {
+    console.log("ℹ️ Skipping restore: Database not initialized.");
+    return;
+  }
   console.log("Restoring parties from Firestore...");
   try {
     const snapshot = await db.collection(PARTIES_COLLECTION).get();
@@ -69,13 +93,13 @@ async function restoreParties() {
       data.votesToSkip = new Set(); // Clear votes on restart
       data.members = new Map();     // Clear members (socket IDs invalid)
       data.isPlaying = false;       // Pause playback
-
+      
       // Ensure hostUserId exists (migration for old parties)
       if (!data.hostUserId) {
-        // If no hostUserId, we can't easily recover the original host.
-        // They will have to claim it via some other means or party is orphaned.
-        // For now, let's leave it null.
-        data.hostUserId = null;
+          // If no hostUserId, we can't easily recover the original host.
+          // They will have to claim it via some other means or party is orphaned.
+          // For now, let's leave it null.
+          data.hostUserId = null; 
       }
 
       parties.set(data.id, data);
@@ -189,7 +213,6 @@ app.get("/join/:partyId", (req, res) => {
   res.send(html);
 });
 
-
 // ---- Models ----
 function createParty(hostSocketId, hostUserId, name, isPublic) {
   return {
@@ -279,19 +302,19 @@ function broadcastTheme(partyId) {
 }
 
 function isHost(party, socketId) {
-  // Check if the socket is the currently active host socket
-  if (party.hostId === socketId) return true;
+    // Check if the socket is the currently active host socket
+    if (party.hostId === socketId) return true;
+    
+    // Also check if the user associated with this socket is the hostUser
+    const member = party.members.get(socketId);
+    if (member && member.userId === party.hostUserId) return true;
 
-  // Also check if the user associated with this socket is the hostUser
-  const member = party.members.get(socketId);
-  if (member && member.userId === party.hostUserId) return true;
-
-  return false;
+    return false;
 }
 
 // ---- Socket Logic ----
 io.on("connection", (socket) => {
-  console.log("Connected:", socket.id);
+  // console.log("Connected:", socket.id); // Too noisy, waiting for identification
 
   // ---------------- CREATE PARTY ----------------
   socket.on("CREATE_PARTY", async (data) => {
@@ -300,16 +323,19 @@ io.on("connection", (socket) => {
     const username = data ? data.username : "Host";
     const avatar = data ? data.avatar : "👑";
     const userId = data ? data.userId : uuidv4(); // Fallback if not provided
+    
+    console.log(`✨ Created: ${username} (${socket.id}) -> Party ${name || 'Untitled'}`);
 
     const party = createParty(socket.id, userId, name, isPublic);
     parties.set(party.id, party);
+    // ... (rest of function)
 
     party.members.set(socket.id, { username, avatar, userId });
     await socket.join(party.id);
 
-    socket.emit("PARTY_STATE", {
-      ...party,
-      isHost: true,
+    socket.emit("PARTY_STATE", { 
+      ...party, 
+      isHost: true, 
       size: party.members.size,
       members: getMembersList(party)
     });
@@ -344,29 +370,31 @@ io.on("connection", (socket) => {
 
     // Check if this user is the host returning
     const isReturningHost = party.hostUserId === userId;
-
+    
     if (isReturningHost) {
-      party.hostId = socket.id; // Reclaim active socket
-      party.hostDisconnectedAt = null; // Host is back! Cancel transfer.
+        party.hostId = socket.id; // Reclaim active socket
+        party.hostDisconnectedAt = null; // Host is back! Cancel transfer.
     }
 
     party.members.set(socket.id, { username, avatar, userId });
     await socket.join(partyId);
 
-    socket.emit("PARTY_STATE", {
-      ...party,
-      isHost: isReturningHost,
+    console.log(`👋 Joined: ${username} (${socket.id}) -> Party ${partyId}`);
+
+    socket.emit("PARTY_STATE", { 
+      ...party, 
+      isHost: isReturningHost, 
       size: party.members.size,
       members: getMembersList(party)
     });
 
     if (isReturningHost) {
-      io.to(partyId).emit("INFO", "The Host has reconnected!");
-      io.to(partyId).emit("HOST_UPDATE", { hostId: socket.id });
+        io.to(partyId).emit("INFO", "The Host has reconnected!");
+        io.to(partyId).emit("HOST_UPDATE", { hostId: socket.id });
     } else {
-      io.to(partyId).emit("INFO", `${username} joined the party`);
+        io.to(partyId).emit("INFO", `${username} joined the party`);
     }
-
+    
     broadcastPartySize(partyId);
     broadcastMembersList(partyId);
     emitVoteState(partyId, party);
@@ -384,30 +412,30 @@ io.on("connection", (socket) => {
     if (!party) return;
 
     if (party.hostUserId === userId) {
-      // Success: It is the host
-      party.hostId = socket.id;
-      party.hostDisconnectedAt = null; // Host is back!
-      party.members.set(socket.id, { username, avatar, userId });
-      await socket.join(partyId);
+        // Success: It is the host
+        party.hostId = socket.id;
+        party.hostDisconnectedAt = null; // Host is back!
+        party.members.set(socket.id, { username, avatar, userId });
+        await socket.join(partyId);
 
-      socket.emit("PARTY_STATE", {
-        ...party,
-        isHost: true,
-        size: party.members.size,
-        members: getMembersList(party)
-      });
-
-      io.to(partyId).emit("INFO", "The Host has reconnected!");
-      io.to(partyId).emit("HOST_UPDATE", { hostId: socket.id });
-
-      broadcastPartySize(partyId);
-      broadcastMembersList(partyId);
-      saveParty(party);
+        socket.emit("PARTY_STATE", { 
+            ...party, 
+            isHost: true, 
+            size: party.members.size,
+            members: getMembersList(party)
+        });
+        
+        io.to(partyId).emit("INFO", "The Host has reconnected!");
+        io.to(partyId).emit("HOST_UPDATE", { hostId: socket.id });
+        
+        broadcastPartySize(partyId);
+        broadcastMembersList(partyId);
+        saveParty(party);
     } else {
-      socket.emit("ERROR", "You are not authorized to be the host.");
+        socket.emit("ERROR", "You are not authorized to be the host.");
     }
   });
-
+  
   // ---------------- KICK USER ----------------
   socket.on("KICK_USER", ({ partyId, targetId }) => {
     const party = getPartyOrError(socket, partyId);
@@ -596,10 +624,10 @@ io.on("connection", (socket) => {
   socket.on("SUBMIT_TICKET", async (ticket) => {
     console.log("Support ticket received:", ticket);
     if (!db) {
-      socket.emit("TICKET_ERROR", "Support system unavailable (Database offline).");
-      return;
+        socket.emit("TICKET_ERROR", "Support system unavailable (Database offline).");
+        return;
     }
-
+    
     try {
       const ticketId = uuidv4();
       await db.collection("support_tickets").doc(ticketId).set({
@@ -618,10 +646,13 @@ io.on("connection", (socket) => {
 
   // ---------------- DISCONNECT ----------------
   socket.on("disconnect", () => {
-    console.log("Disconnected:", socket.id);
+    let identified = false;
     for (const [partyId, party] of parties) {
       if (party.members.has(socket.id)) {
-
+        const user = party.members.get(socket.id);
+        console.log(`💨 Disconnected: ${user.username} (${socket.id}) from Party ${partyId}`);
+        identified = true;
+        
         // Remove from members list (visual)
         party.members.delete(socket.id);
         party.votesToSkip.delete(socket.id);
@@ -632,11 +663,11 @@ io.on("connection", (socket) => {
 
         // CHECK IF HOST
         if (party.hostId === socket.id) {
-          console.log(`Host of party ${partyId} disconnected. Starting grace period.`);
-          // Start Grace Period
-          party.hostDisconnectedAt = Date.now();
+           console.log(`Host of party ${partyId} disconnected. Starting grace period.`);
+           // Start Grace Period
+           party.hostDisconnectedAt = Date.now();
         }
-
+        
         saveParty(party);
       }
     }
@@ -651,49 +682,63 @@ setInterval(() => {
       io.to(id).emit("SYNC", { serverTime: now, startedAt: party.startedAt, currentIndex: party.currentIndex });
     }
 
-    // ---- HOST PRESENCE CHECK ----
-    // If the host is NOT in the members list and we haven't started the timer, start it.
-    // This handles server restarts (where members are cleared) or desyncs.
-    if (!party.members.has(party.hostId) && !party.hostDisconnectedAt) {
-      console.log(`Party ${id}: Host socket ${party.hostId} not found in members. Starting grace period.`);
-      party.hostDisconnectedAt = Date.now();
-      saveParty(party);
+    // ---- 1. AUTO-CLAIM THRONE (If host is missing but members exist) ----
+    if (!party.hostId && party.members.size > 0) {
+        const nextSocketId = party.members.keys().next().value;
+        const nextUser = party.members.get(nextSocketId);
+        
+        party.hostId = nextSocketId;
+        party.hostUserId = nextUser.userId;
+        party.hostDisconnectedAt = null;
+
+        io.to(id).emit("HOST_UPDATE", { hostId: nextSocketId });
+        io.to(id).emit("INFO", `Host position was empty. ${nextUser.username} is now the Host.`);
+        broadcastMembersList(id);
+        saveParty(party);
+        continue;
     }
 
-    // ---- HOST GRACE PERIOD CHECK ----
+    // ---- 2. HOST PRESENCE CHECK ----
+    // Only check if we HAVE a host assigned, and they are missing
+    if (party.hostId && !party.members.has(party.hostId) && !party.hostDisconnectedAt) {
+        console.log(`Party ${id}: Host socket ${party.hostId} not found in members. Starting grace period.`);
+        party.hostDisconnectedAt = Date.now();
+        saveParty(party);
+    }
+
+    // ---- 3. HOST GRACE PERIOD CHECK ----
     if (party.hostDisconnectedAt) {
-      const gracePeriod = 60 * 1000; // 60 Seconds
+      const gracePeriod = 120 * 1000; // 120 Seconds
       if (now - party.hostDisconnectedAt > gracePeriod) {
-        console.log(`Party ${id}: Host grace period expired. Transferring leadership.`);
+         console.log(`Party ${id}: Host grace period expired.`);
+         
+         if (party.members.size > 0) {
+             // Transfer leadership
+             const nextSocketId = party.members.keys().next().value;
+             const nextUser = party.members.get(nextSocketId);
 
-        if (party.members.size > 0) {
-          // 1. Pick new host (Oldest member by insertion order in Map)
-          const nextSocketId = party.members.keys().next().value;
-          const nextUser = party.members.get(nextSocketId);
+             party.hostId = nextSocketId;
+             party.hostUserId = nextUser.userId;
+             party.hostDisconnectedAt = null;
 
-          // 2. Assign new roles
-          party.hostId = nextSocketId;
-          party.hostUserId = nextUser.userId;
-          party.hostDisconnectedAt = null; // Reset flag
-
-          // 3. Notify
-          io.to(id).emit("HOST_UPDATE", { hostId: nextSocketId });
-          io.to(id).emit("INFO", `Host inactive. ${nextUser.username} is now the Host.`);
-
-          // 4. Update state for everyone
-          broadcastMembersList(id);
-          saveParty(party);
-        } else {
-          // No one left? Close it.
-          io.to(id).emit("PARTY_ENDED", { message: "Party ended due to lack of host." });
-          parties.delete(id);
-          removeParty(id);
-          continue; // Skip the rest
-        }
+             io.to(id).emit("HOST_UPDATE", { hostId: nextSocketId });
+             io.to(id).emit("INFO", `Host inactive. ${nextUser.username} is now the Host.`);
+             broadcastMembersList(id);
+             saveParty(party);
+         } else {
+             // No one left? Make party DORMANT (Hostless) instead of deleting.
+             // This allows the original host to reclaim it later (within 24h).
+             console.log(`Party ${id}: No members left. Setting to DORMANT (waiting for reclaim).`);
+             party.hostId = null; // No active host
+             party.hostDisconnectedAt = null; // Stop timer
+             party.isPlaying = false; // Pause music
+             
+             saveParty(party);
+         }
       }
     }
 
-    // Cleanup old parties
+    // Cleanup old parties (24 Hours Inactivity)
     if (now - party.lastActiveAt > 24 * 60 * 60 * 1000) {
       io.to(id).emit("PARTY_ENDED", { message: "Party expired due to inactivity." });
       parties.delete(id);
