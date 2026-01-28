@@ -111,6 +111,117 @@ async function restoreParties() {
 }
 
 // ---- HTTP Routes ----
+// Track uptime
+const serverStartedAt = Date.now();
+
+app.get("/", (req, res) => {
+  const uptimeSeconds = Math.floor((Date.now() - serverStartedAt) / 1000);
+  const partyCount = parties.size;
+
+  const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sync Music Server</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0f0f0f;
+      color: #eaeaea;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    .container {
+      max-width: 520px;
+      background: #181818;
+      padding: 36px;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+    }
+
+    h1 {
+      margin: 0 0 16px;
+      font-size: 26px;
+    }
+
+    p {
+      color: #aaa;
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+
+    .info {
+      display: inline-block;
+      padding: 8px 14px;
+      border-radius: 20px;
+      background: #03dac6;
+      color: #000;
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+
+    .stats {
+      margin-top: 16px;
+      font-size: 14px;
+      color: #ccc;
+    }
+
+    .stats span {
+      display: block;
+      margin-top: 6px;
+    }
+
+    .meta {
+      margin-top: 20px;
+      font-size: 12px;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Sync Music Backend</h1>
+    <p>
+      This server powers real-time music parties, handling live playback
+      synchronization, voting, chat, and party management using Socket.IO
+      and Firestore for persistence.
+    </p>
+
+    <div class="info">ℹ️ Server Running</div>
+
+    <div class="stats">
+      <span>👥 Active Parties: <strong id="partyCount">${partyCount}</strong></span>
+      <span>⏱ Uptime: <strong id="uptime">${uptimeSeconds}</strong> seconds</span>
+    </div>
+
+    <div class="meta">
+      Loaded at ${new Date().toLocaleString()}
+    </div>
+  </div>
+
+  <script>
+    let uptime = ${uptimeSeconds};
+
+    setInterval(() => {
+      uptime++;
+      document.getElementById("uptime").textContent = uptime;
+    }, 1000);
+  </script>
+</body>
+</html>
+  `;
+
+  res.send(html);
+});
+
+
 app.get("/join/:partyId", (req, res) => {
   const partyId = req.params.partyId;
   const deepLink = `syncmusic://join/${partyId}`;
