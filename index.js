@@ -670,7 +670,7 @@ io.on("connection", (socket) => {
     saveParty(party);
   });
 
-  // ---------------- PLAY / PAUSE / ENDED ----------------
+  // ---------------- PLAY / PAUSE / SEEK / ENDED ----------------
   socket.on("PLAY", ({ partyId }) => {
     const party = getPartyOrError(socket, partyId);
     if (!party || !isHost(party, socket.id)) return;
@@ -688,6 +688,23 @@ io.on("connection", (socket) => {
     party.isPlaying = false;
     party.elapsed = Date.now() - party.startedAt;
     io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: false });
+    saveParty(party);
+  });
+
+  socket.on("SEEK", ({ partyId, position }) => {
+    const party = getPartyOrError(socket, partyId);
+    if (!party || !isHost(party, socket.id)) return;
+
+    party.elapsed = position * 1000; // Position in seconds -> ms
+    if (party.isPlaying) {
+      party.startedAt = Date.now() - party.elapsed;
+    }
+    
+    io.to(partyId).emit("PLAYBACK_UPDATE", { 
+        isPlaying: party.isPlaying, 
+        startedAt: party.startedAt, 
+        currentIndex: party.currentIndex 
+    });
     saveParty(party);
   });
 
