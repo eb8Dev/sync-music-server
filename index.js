@@ -221,7 +221,6 @@ app.get("/", (req, res) => {
   res.send(html);
 });
 
-
 app.get("/join/:partyId", (req, res) => {
   const partyId = req.params.partyId;
   const deepLink = `syncmusic://join/${partyId}`;
@@ -325,12 +324,13 @@ app.get("/join/:partyId", (req, res) => {
 });
 
 // ---- Models ----
-function createParty(hostSocketId, hostUserId, name, isPublic) {
+function createParty(hostSocketId, hostUserId, name, isPublic, mode) {
   return {
     id: uuidv4().slice(0, 6).toUpperCase(),
     hostId: hostSocketId, // The ACTIVE socket ID of the host
     hostUserId: hostUserId, // The PERMANENT ID of the host
     name: name || "Music Party",
+    mode: mode || "party", // 'party' or 'movie'
     isPublic: isPublic === true,
     queue: [],
     currentIndex: 0,
@@ -431,13 +431,14 @@ io.on("connection", (socket) => {
   socket.on("CREATE_PARTY", async (data) => {
     const name = data ? data.name : null;
     const isPublic = data ? data.isPublic : false;
+    const mode = data ? data.mode : "party";
     const username = data ? data.username : "Host";
     const avatar = data ? data.avatar : "👑";
     const userId = data ? data.userId : uuidv4(); // Fallback if not provided
     
-    console.log(`✨ Created: ${username} (${socket.id}) -> Party ${name || 'Untitled'}`);
+    console.log(`✨ Created: ${username} (${socket.id}) -> Party ${name || 'Untitled'} [${mode}]`);
 
-    const party = createParty(socket.id, userId, name, isPublic);
+    const party = createParty(socket.id, userId, name, isPublic, mode);
     parties.set(party.id, party);
     // ... (rest of function)
 
