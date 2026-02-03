@@ -340,6 +340,11 @@ function createParty(hostSocketId, hostUserId, name, isPublic, mode) {
     votesToSkip: new Set(),
     members: new Map(),
     themeIndex: 0,
+    settings: {
+      guestControls: false,
+      guestQueueing: true,
+      voteSkip: true
+    },
     createdAt: Date.now(),
     lastActiveAt: Date.now()
   };
@@ -351,6 +356,10 @@ function getPartyOrError(socket, partyId) {
   if (!party) {
     socket.emit("ERROR", "Party not found");
     return null;
+  }
+  // Ensure settings exist (migration for old active parties)
+  if (!party.settings) {
+      party.settings = { guestControls: false, guestQueueing: true, voteSkip: true };
   }
   party.lastActiveAt = Date.now();
   saveParty(party);
@@ -384,7 +393,8 @@ function getPublicParties() {
 
 function emitVoteState(partyId, party) {
   const size = party.members.size;
-  const enabled = size >= 5;
+  // Voting enabled if enough people AND setting is allowed
+  const enabled = (size >= 5) && (party.settings ? party.settings.voteSkip : true);
   const required = enabled ? Math.ceil(size * 0.5) : 0; // 50% Threshold
 
   io.to(partyId).emit("VOTE_UPDATE", {
@@ -547,6 +557,19 @@ io.on("connection", (socket) => {
         socket.emit("ERROR", "You are not authorized to be the host.");
     }
   });
+
+  // ---------------- UPDATE SETTINGS ----------------
+  socket.on("UPDATE_SETTINGS", ({ partyId, settings }) => {
+    const party = getPartyOrError(socket, partyId);
+    if (!party || !isHost(party, socket.id)) return;
+
+    // Merge settings
+    party.settings = { ...party.settings, ...settings };
+    
+    io.to(partyId).emit("SETTINGS_UPDATE", party.settings);
+    emitVoteState(partyId, party); // Re-eval vote state
+    saveParty(party);
+  });
   
   // ---------------- KICK USER ----------------
   socket.on("KICK_USER", ({ partyId, targetId }) => {
@@ -584,7 +607,11 @@ io.on("connection", (socket) => {
   // ---------------- CHANGE INDEX ----------------
   socket.on("CHANGE_INDEX", ({ partyId, newIndex }) => {
     const party = getPartyOrError(socket, partyId);
-    if (!party || !isHost(party, socket.id)) return;
+    if (!party) return;
+    
+    const canControl = isHost(party, socket.id) || (party.settings && party.settings.guestControls);
+    if (!canControl) return;
+
     if (newIndex < 0 || newIndex >= party.queue.length) return;
 
     party.currentIndex = newIndex;
@@ -602,6 +629,12 @@ io.on("connection", (socket) => {
   socket.on("ADD_TRACK", ({ partyId, track }) => {
     const party = getPartyOrError(socket, partyId);
     if (!party) return;
+
+    const canAdd = isHost(party, socket.id) || (party.settings && party.settings.guestQueueing);
+    if (!canAdd) {
+        socket.emit("ERROR", "Host has disabled adding songs.");
+        return;
+    }
 
     party.queue.push({
       id: uuidv4(),
@@ -642,6 +675,9 @@ io.on("connection", (socket) => {
     const party = parties.get(partyId);
     if (!party) return;
 
+    // Check setting
+    if (party.settings && !party.settings.voteSkip) return;
+
     const size = party.members.size;
     if (size < 5) return;
 
@@ -673,7 +709,10 @@ io.on("connection", (socket) => {
   // ---------------- PLAY / PAUSE / SEEK / ENDED ----------------
   socket.on("PLAY", ({ partyId }) => {
     const party = getPartyOrError(socket, partyId);
-    if (!party || !isHost(party, socket.id)) return;
+    if (!party) return;
+    
+    const canControl = isHost(party, socket.id) || (party.settings && party.settings.guestControls);
+    if (!canControl) return;
 
     party.isPlaying = true;
     party.startedAt = Date.now() - (party.elapsed || 0);
@@ -683,7 +722,10 @@ io.on("connection", (socket) => {
 
   socket.on("PAUSE", ({ partyId }) => {
     const party = getPartyOrError(socket, partyId);
-    if (!party || !isHost(party, socket.id)) return;
+    if (!party) return;
+    
+    const canControl = isHost(party, socket.id) || (party.settings && party.settings.guestControls);
+    if (!canControl) return;
 
     party.isPlaying = false;
     party.elapsed = Date.now() - party.startedAt;
@@ -693,7 +735,10 @@ io.on("connection", (socket) => {
 
   socket.on("SEEK", ({ partyId, position }) => {
     const party = getPartyOrError(socket, partyId);
-    if (!party || !isHost(party, socket.id)) return;
+    if (!party) return;
+    
+    const canControl = isHost(party, socket.id) || (party.settings && party.settings.guestControls);
+    if (!canControl) return;
 
     party.elapsed = position * 1000; // Position in seconds -> ms
     if (party.isPlaying) {
