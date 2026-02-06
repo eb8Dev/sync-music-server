@@ -459,7 +459,8 @@ io.on("connection", (socket) => {
       ...party, 
       isHost: true, 
       size: party.members.size,
-      members: getMembersList(party)
+      members: getMembersList(party),
+      serverTime: Date.now()
     });
     broadcastPartySize(party.id);
     broadcastMembersList(party.id);
@@ -507,7 +508,8 @@ io.on("connection", (socket) => {
       ...party, 
       isHost: isReturningHost, 
       size: party.members.size,
-      members: getMembersList(party)
+      members: getMembersList(party),
+      serverTime: Date.now()
     });
 
     if (isReturningHost) {
@@ -544,7 +546,8 @@ io.on("connection", (socket) => {
             ...party, 
             isHost: true, 
             size: party.members.size,
-            members: getMembersList(party)
+            members: getMembersList(party),
+            serverTime: Date.now()
         });
         
         io.to(partyId).emit("INFO", "The Host has reconnected!");
@@ -621,7 +624,7 @@ io.on("connection", (socket) => {
     party.votesToSkip.clear();
 
     emitVoteState(partyId, party);
-    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: true, startedAt: party.startedAt, currentIndex: party.currentIndex });
+    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: true, startedAt: party.startedAt, currentIndex: party.currentIndex, serverTime: Date.now() });
     saveParty(party);
   });
 
@@ -666,7 +669,7 @@ io.on("connection", (socket) => {
     if (party.currentIndex > party.queue.length) party.currentIndex = party.queue.length;
 
     io.to(partyId).emit("QUEUE_UPDATED", party.queue);
-    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: party.isPlaying, startedAt: party.startedAt, currentIndex: party.currentIndex });
+    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: party.isPlaying, startedAt: party.startedAt, currentIndex: party.currentIndex, serverTime: Date.now() });
     saveParty(party);
   });
 
@@ -701,7 +704,7 @@ io.on("connection", (socket) => {
     }
 
     emitVoteState(partyId, party);
-    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: party.isPlaying, startedAt: party.startedAt, currentIndex: party.currentIndex });
+    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: party.isPlaying, startedAt: party.startedAt, currentIndex: party.currentIndex, serverTime: Date.now() });
     io.to(partyId).emit("INFO", "Skipped by vote!");
     saveParty(party);
   });
@@ -716,7 +719,7 @@ io.on("connection", (socket) => {
 
     party.isPlaying = true;
     party.startedAt = Date.now() - (party.elapsed || 0);
-    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: true, startedAt: party.startedAt, currentIndex: party.currentIndex });
+    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: true, startedAt: party.startedAt, currentIndex: party.currentIndex, serverTime: Date.now() });
     saveParty(party);
   });
 
@@ -729,7 +732,7 @@ io.on("connection", (socket) => {
 
     party.isPlaying = false;
     party.elapsed = Date.now() - party.startedAt;
-    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: false });
+    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: false, serverTime: Date.now() });
     saveParty(party);
   });
 
@@ -748,7 +751,8 @@ io.on("connection", (socket) => {
     io.to(partyId).emit("PLAYBACK_UPDATE", { 
         isPlaying: party.isPlaying, 
         startedAt: party.startedAt, 
-        currentIndex: party.currentIndex 
+        currentIndex: party.currentIndex,
+        serverTime: Date.now()
     });
     saveParty(party);
   });
@@ -769,7 +773,7 @@ io.on("connection", (socket) => {
       party.startedAt = Date.now();
     }
 
-    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: party.isPlaying, startedAt: party.startedAt, currentIndex: party.currentIndex });
+    io.to(partyId).emit("PLAYBACK_UPDATE", { isPlaying: party.isPlaying, startedAt: party.startedAt, currentIndex: party.currentIndex, serverTime: Date.now() });
     saveParty(party);
   });
 
