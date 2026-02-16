@@ -36,11 +36,11 @@ const db = admin.apps.length ? admin.firestore() : null; // Check if app initial
 const PARTIES_COLLECTION = "active_parties";
 
 if (!db) {
-    console.warn("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-    console.warn("WARNING: Database is NOT connected.");
-    console.warn("All parties will be lost when the server restarts.");
-    console.warn("To fix: Set FIREBASE_SERVICE_ACCOUNT env var or add serviceAccountKey.json");
-    console.warn("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+  console.warn("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+  console.warn("WARNING: Database is NOT connected.");
+  console.warn("All parties will be lost when the server restarts.");
+  console.warn("To fix: Set FIREBASE_SERVICE_ACCOUNT env var or add serviceAccountKey.json");
+  console.warn("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
 }
 
 const app = express();
@@ -93,13 +93,13 @@ async function restoreParties() {
       data.votesToSkip = new Set(); // Clear votes on restart
       data.members = new Map();     // Clear members (socket IDs invalid)
       data.isPlaying = false;       // Pause playback
-      
+
       // Ensure hostUserId exists (migration for old parties)
       if (!data.hostUserId) {
-          // If no hostUserId, we can't easily recover the original host.
-          // They will have to claim it via some other means or party is orphaned.
-          // For now, let's leave it null.
-          data.hostUserId = null; 
+        // If no hostUserId, we can't easily recover the original host.
+        // They will have to claim it via some other means or party is orphaned.
+        // For now, let's leave it null.
+        data.hostUserId = null;
       }
 
       parties.set(data.id, data);
@@ -359,7 +359,7 @@ function getPartyOrError(socket, partyId) {
   }
   // Ensure settings exist (migration for old active parties)
   if (!party.settings) {
-      party.settings = { guestControls: false, guestQueueing: true, voteSkip: true };
+    party.settings = { guestControls: false, guestQueueing: true, voteSkip: true };
   }
   party.lastActiveAt = Date.now();
   saveParty(party);
@@ -423,14 +423,14 @@ function broadcastTheme(partyId) {
 }
 
 function isHost(party, socketId) {
-    // Check if the socket is the currently active host socket
-    if (party.hostId === socketId) return true;
-    
-    // Also check if the user associated with this socket is the hostUser
-    const member = party.members.get(socketId);
-    if (member && member.userId === party.hostUserId) return true;
+  // Check if the socket is the currently active host socket
+  if (party.hostId === socketId) return true;
 
-    return false;
+  // Also check if the user associated with this socket is the hostUser
+  const member = party.members.get(socketId);
+  if (member && member.userId === party.hostUserId) return true;
+
+  return false;
 }
 
 // ---- Socket Logic ----
@@ -445,7 +445,7 @@ io.on("connection", (socket) => {
     const username = data ? data.username : "Host";
     const avatar = data ? data.avatar : "👑";
     const userId = data ? data.userId : uuidv4(); // Fallback if not provided
-    
+
     console.log(`✨ Created: ${username} (${socket.id}) -> Party ${name || 'Untitled'} [${mode}]`);
 
     const party = createParty(socket.id, userId, name, isPublic, mode);
@@ -455,9 +455,9 @@ io.on("connection", (socket) => {
     party.members.set(socket.id, { username, avatar, userId });
     await socket.join(party.id);
 
-    socket.emit("PARTY_STATE", { 
-      ...party, 
-      isHost: true, 
+    socket.emit("PARTY_STATE", {
+      ...party,
+      isHost: true,
       size: party.members.size,
       members: getMembersList(party),
       serverTime: Date.now()
@@ -493,10 +493,10 @@ io.on("connection", (socket) => {
 
     // Check if this user is the host returning
     const isReturningHost = party.hostUserId === userId;
-    
+
     if (isReturningHost) {
-        party.hostId = socket.id; // Reclaim active socket
-        party.hostDisconnectedAt = null; // Host is back! Cancel transfer.
+      party.hostId = socket.id; // Reclaim active socket
+      party.hostDisconnectedAt = null; // Host is back! Cancel transfer.
     }
 
     party.members.set(socket.id, { username, avatar, userId });
@@ -504,21 +504,21 @@ io.on("connection", (socket) => {
 
     console.log(`👋 Joined: ${username} (${socket.id}) -> Party ${partyId}`);
 
-    socket.emit("PARTY_STATE", { 
-      ...party, 
-      isHost: isReturningHost, 
+    socket.emit("PARTY_STATE", {
+      ...party,
+      isHost: isReturningHost,
       size: party.members.size,
       members: getMembersList(party),
       serverTime: Date.now()
     });
 
     if (isReturningHost) {
-        io.to(partyId).emit("INFO", "The Host has reconnected!");
-        io.to(partyId).emit("HOST_UPDATE", { hostId: socket.id });
+      io.to(partyId).emit("INFO", "The Host has reconnected!");
+      io.to(partyId).emit("HOST_UPDATE", { hostId: socket.id });
     } else {
-        io.to(partyId).emit("INFO", `${username} joined the party`);
+      io.to(partyId).emit("INFO", `${username} joined the party`);
     }
-    
+
     broadcastPartySize(partyId);
     broadcastMembersList(partyId);
     emitVoteState(partyId, party);
@@ -536,28 +536,28 @@ io.on("connection", (socket) => {
     if (!party) return;
 
     if (party.hostUserId === userId) {
-        // Success: It is the host
-        party.hostId = socket.id;
-        party.hostDisconnectedAt = null; // Host is back!
-        party.members.set(socket.id, { username, avatar, userId });
-        await socket.join(partyId);
+      // Success: It is the host
+      party.hostId = socket.id;
+      party.hostDisconnectedAt = null; // Host is back!
+      party.members.set(socket.id, { username, avatar, userId });
+      await socket.join(partyId);
 
-        socket.emit("PARTY_STATE", { 
-            ...party, 
-            isHost: true, 
-            size: party.members.size,
-            members: getMembersList(party),
-            serverTime: Date.now()
-        });
-        
-        io.to(partyId).emit("INFO", "The Host has reconnected!");
-        io.to(partyId).emit("HOST_UPDATE", { hostId: socket.id });
-        
-        broadcastPartySize(partyId);
-        broadcastMembersList(partyId);
-        saveParty(party);
+      socket.emit("PARTY_STATE", {
+        ...party,
+        isHost: true,
+        size: party.members.size,
+        members: getMembersList(party),
+        serverTime: Date.now()
+      });
+
+      io.to(partyId).emit("INFO", "The Host has reconnected!");
+      io.to(partyId).emit("HOST_UPDATE", { hostId: socket.id });
+
+      broadcastPartySize(partyId);
+      broadcastMembersList(partyId);
+      saveParty(party);
     } else {
-        socket.emit("ERROR", "You are not authorized to be the host.");
+      socket.emit("ERROR", "You are not authorized to be the host.");
     }
   });
 
@@ -568,12 +568,12 @@ io.on("connection", (socket) => {
 
     // Merge settings
     party.settings = { ...party.settings, ...settings };
-    
+
     io.to(partyId).emit("SETTINGS_UPDATE", party.settings);
     emitVoteState(partyId, party); // Re-eval vote state
     saveParty(party);
   });
-  
+
   // ---------------- KICK USER ----------------
   socket.on("KICK_USER", ({ partyId, targetId }) => {
     const party = getPartyOrError(socket, partyId);
@@ -611,7 +611,7 @@ io.on("connection", (socket) => {
   socket.on("CHANGE_INDEX", ({ partyId, newIndex }) => {
     const party = getPartyOrError(socket, partyId);
     if (!party) return;
-    
+
     const canControl = isHost(party, socket.id) || (party.settings && party.settings.guestControls);
     if (!canControl) return;
 
@@ -635,8 +635,8 @@ io.on("connection", (socket) => {
 
     const canAdd = isHost(party, socket.id) || (party.settings && party.settings.guestQueueing);
     if (!canAdd) {
-        socket.emit("ERROR", "Host has disabled adding songs.");
-        return;
+      socket.emit("ERROR", "Host has disabled adding songs.");
+      return;
     }
 
     party.queue.push({
@@ -713,7 +713,7 @@ io.on("connection", (socket) => {
   socket.on("PLAY", ({ partyId }) => {
     const party = getPartyOrError(socket, partyId);
     if (!party) return;
-    
+
     const canControl = isHost(party, socket.id) || (party.settings && party.settings.guestControls);
     if (!canControl) return;
 
@@ -726,7 +726,7 @@ io.on("connection", (socket) => {
   socket.on("PAUSE", ({ partyId }) => {
     const party = getPartyOrError(socket, partyId);
     if (!party) return;
-    
+
     const canControl = isHost(party, socket.id) || (party.settings && party.settings.guestControls);
     if (!canControl) return;
 
@@ -739,7 +739,7 @@ io.on("connection", (socket) => {
   socket.on("SEEK", ({ partyId, position }) => {
     const party = getPartyOrError(socket, partyId);
     if (!party) return;
-    
+
     const canControl = isHost(party, socket.id) || (party.settings && party.settings.guestControls);
     if (!canControl) return;
 
@@ -747,12 +747,12 @@ io.on("connection", (socket) => {
     if (party.isPlaying) {
       party.startedAt = Date.now() - party.elapsed;
     }
-    
-    io.to(partyId).emit("PLAYBACK_UPDATE", { 
-        isPlaying: party.isPlaying, 
-        startedAt: party.startedAt, 
-        currentIndex: party.currentIndex,
-        serverTime: Date.now()
+
+    io.to(partyId).emit("PLAYBACK_UPDATE", {
+      isPlaying: party.isPlaying,
+      startedAt: party.startedAt,
+      currentIndex: party.currentIndex,
+      serverTime: Date.now()
     });
     saveParty(party);
   });
@@ -793,19 +793,30 @@ io.on("connection", (socket) => {
   });
 
   // ---------------- CHAT ----------------
-  socket.on("SEND_MESSAGE", ({ partyId, message, username }) => {
+  socket.on("SEND_MESSAGE", ({ partyId, message, username, id }) => {
     if (!message || !message.trim()) return;
-    io.to(partyId).emit("CHAT_MESSAGE", { id: uuidv4(), senderId: socket.id, username, text: message.trim(), timestamp: Date.now() });
+    io.to(partyId).emit("CHAT_MESSAGE", {
+      id: id || uuidv4(),
+      senderId: socket.id,
+      username,
+      text: message.trim(),
+      timestamp: Date.now()
+    });
+  });
+
+  // ---------------- SYNC PING ----------------
+  socket.on("PING", (clientTime) => {
+    socket.emit("PONG", { clientTime, serverTime: Date.now() });
   });
 
   // ---------------- SUPPORT ----------------
   socket.on("SUBMIT_TICKET", async (ticket) => {
     console.log("Support ticket received:", ticket);
     if (!db) {
-        socket.emit("TICKET_ERROR", "Support system unavailable (Database offline).");
-        return;
+      socket.emit("TICKET_ERROR", "Support system unavailable (Database offline).");
+      return;
     }
-    
+
     try {
       const ticketId = uuidv4();
       await db.collection("support_tickets").doc(ticketId).set({
@@ -830,7 +841,7 @@ io.on("connection", (socket) => {
         const user = party.members.get(socket.id);
         console.log(`💨 Disconnected: ${user.username} (${socket.id}) from Party ${partyId}`);
         identified = true;
-        
+
         // Remove from members list (visual)
         party.members.delete(socket.id);
         party.votesToSkip.delete(socket.id);
@@ -841,11 +852,11 @@ io.on("connection", (socket) => {
 
         // CHECK IF HOST
         if (party.hostId === socket.id) {
-           console.log(`Host of party ${partyId} disconnected. Starting grace period.`);
-           // Start Grace Period
-           party.hostDisconnectedAt = Date.now();
+          console.log(`Host of party ${partyId} disconnected. Starting grace period.`);
+          // Start Grace Period
+          party.hostDisconnectedAt = Date.now();
         }
-        
+
         saveParty(party);
       }
     }
@@ -862,57 +873,57 @@ setInterval(() => {
 
     // ---- 1. AUTO-CLAIM THRONE (If host is missing but members exist) ----
     if (!party.hostId && party.members.size > 0) {
-        const nextSocketId = party.members.keys().next().value;
-        const nextUser = party.members.get(nextSocketId);
-        
-        party.hostId = nextSocketId;
-        party.hostUserId = nextUser.userId;
-        party.hostDisconnectedAt = null;
+      const nextSocketId = party.members.keys().next().value;
+      const nextUser = party.members.get(nextSocketId);
 
-        io.to(id).emit("HOST_UPDATE", { hostId: nextSocketId });
-        io.to(id).emit("INFO", `Host position was empty. ${nextUser.username} is now the Host.`);
-        broadcastMembersList(id);
-        saveParty(party);
-        continue;
+      party.hostId = nextSocketId;
+      party.hostUserId = nextUser.userId;
+      party.hostDisconnectedAt = null;
+
+      io.to(id).emit("HOST_UPDATE", { hostId: nextSocketId });
+      io.to(id).emit("INFO", `Host position was empty. ${nextUser.username} is now the Host.`);
+      broadcastMembersList(id);
+      saveParty(party);
+      continue;
     }
 
     // ---- 2. HOST PRESENCE CHECK ----
     // Only check if we HAVE a host assigned, and they are missing
     if (party.hostId && !party.members.has(party.hostId) && !party.hostDisconnectedAt) {
-        console.log(`Party ${id}: Host socket ${party.hostId} not found in members. Starting grace period.`);
-        party.hostDisconnectedAt = Date.now();
-        saveParty(party);
+      console.log(`Party ${id}: Host socket ${party.hostId} not found in members. Starting grace period.`);
+      party.hostDisconnectedAt = Date.now();
+      saveParty(party);
     }
 
     // ---- 3. HOST GRACE PERIOD CHECK ----
     if (party.hostDisconnectedAt) {
       const gracePeriod = 120 * 1000; // 120 Seconds
       if (now - party.hostDisconnectedAt > gracePeriod) {
-         console.log(`Party ${id}: Host grace period expired.`);
-         
-         if (party.members.size > 0) {
-             // Transfer leadership
-             const nextSocketId = party.members.keys().next().value;
-             const nextUser = party.members.get(nextSocketId);
+        console.log(`Party ${id}: Host grace period expired.`);
 
-             party.hostId = nextSocketId;
-             party.hostUserId = nextUser.userId;
-             party.hostDisconnectedAt = null;
+        if (party.members.size > 0) {
+          // Transfer leadership
+          const nextSocketId = party.members.keys().next().value;
+          const nextUser = party.members.get(nextSocketId);
 
-             io.to(id).emit("HOST_UPDATE", { hostId: nextSocketId });
-             io.to(id).emit("INFO", `Host inactive. ${nextUser.username} is now the Host.`);
-             broadcastMembersList(id);
-             saveParty(party);
-         } else {
-             // No one left? Make party DORMANT (Hostless) instead of deleting.
-             // This allows the original host to reclaim it later (within 24h).
-             console.log(`Party ${id}: No members left. Setting to DORMANT (waiting for reclaim).`);
-             party.hostId = null; // No active host
-             party.hostDisconnectedAt = null; // Stop timer
-             party.isPlaying = false; // Pause music
-             
-             saveParty(party);
-         }
+          party.hostId = nextSocketId;
+          party.hostUserId = nextUser.userId;
+          party.hostDisconnectedAt = null;
+
+          io.to(id).emit("HOST_UPDATE", { hostId: nextSocketId });
+          io.to(id).emit("INFO", `Host inactive. ${nextUser.username} is now the Host.`);
+          broadcastMembersList(id);
+          saveParty(party);
+        } else {
+          // No one left? Make party DORMANT (Hostless) instead of deleting.
+          // This allows the original host to reclaim it later (within 24h).
+          console.log(`Party ${id}: No members left. Setting to DORMANT (waiting for reclaim).`);
+          party.hostId = null; // No active host
+          party.hostDisconnectedAt = null; // Stop timer
+          party.isPlaying = false; // Pause music
+
+          saveParty(party);
+        }
       }
     }
 
