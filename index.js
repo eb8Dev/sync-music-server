@@ -115,8 +115,8 @@ async function restoreParties() {
 const serverStartedAt = Date.now();
 
 app.get("/", (req, res) => {
-  const uptimeSeconds = Math.floor((Date.now() - serverStartedAt) / 1000);
-  const partyCount = parties.size;
+  const playStoreLink =
+    "https://play.google.com/store/apps/details?id=com.eb.sync_music";
 
   const html = `
 <!DOCTYPE html>
@@ -124,7 +124,15 @@ app.get("/", (req, res) => {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sync Music Server</title>
+  <title>Sync Music – Real-Time Music Parties</title>
+
+  <!-- Auto redirect after 3 seconds -->
+  <script>
+    setTimeout(function () {
+      window.location.href = "${playStoreLink}";
+    }, 3000);
+  </script>
+
   <style>
     body {
       margin: 0;
@@ -132,99 +140,85 @@ app.get("/", (req, res) => {
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #0f0f0f;
-      color: #eaeaea;
+      background: linear-gradient(135deg, #0f0f0f, #1c1c1c);
+      color: #ffffff;
       font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      text-align: center;
+      padding: 24px;
     }
 
     .container {
       max-width: 520px;
       background: #181818;
-      padding: 36px;
-      border-radius: 16px;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+      padding: 40px 28px;
+      border-radius: 20px;
+      box-shadow: 0 25px 80px rgba(0, 0, 0, 0.6);
     }
 
     h1 {
-      margin: 0 0 16px;
-      font-size: 26px;
+      font-size: 32px;
+      margin-bottom: 16px;
     }
 
     p {
-      color: #aaa;
+      color: #bbb;
       line-height: 1.6;
-      margin-bottom: 24px;
+      margin-bottom: 28px;
     }
 
-    .info {
+    .btn {
       display: inline-block;
-      padding: 8px 14px;
-      border-radius: 20px;
-      background: #03dac6;
+      padding: 14px 28px;
+      border-radius: 30px;
+      background: #03DAC6;
       color: #000;
-      font-weight: 600;
-      font-size: 14px;
-      margin-bottom: 12px;
+      font-weight: bold;
+      text-decoration: none;
+      transition: 0.2s ease;
     }
 
-    .stats {
-      margin-top: 16px;
-      font-size: 14px;
-      color: #ccc;
+    .btn:hover {
+      opacity: 0.85;
     }
 
-    .stats span {
-      display: block;
-      margin-top: 6px;
-    }
-
-    .meta {
-      margin-top: 20px;
-      font-size: 12px;
-      color: #666;
+    .small {
+      margin-top: 18px;
+      font-size: 13px;
+      color: #777;
     }
   </style>
 </head>
 <body>
+
   <div class="container">
-    <h1>Sync Music Backend</h1>
+    <h1>🎵 Sync Music</h1>
+
     <p>
-      This server powers real-time music parties, handling live playback
-      synchronization, voting, chat, and party management using Socket.IO
-      and Firestore for persistence.
+      Host and join real-time music parties with your friends.
+      Sync playback instantly, vote on tracks, and experience music together —
+      no matter where you are.
     </p>
 
-    <div class="info">ℹ️ Server Running</div>
+    <a href="${playStoreLink}" class="btn">
+      Download on Google Play
+    </a>
 
-    <div class="stats">
-      <span>👥 Active Parties: <strong id="partyCount">${partyCount}</strong></span>
-      <span>⏱ Uptime: <strong id="uptime">${uptimeSeconds}</strong> seconds</span>
-    </div>
-
-    <div class="meta">
-      Loaded at ${new Date().toLocaleString()}
+    <div class="small">
+      Redirecting you to the Play Store...
     </div>
   </div>
 
-  <script>
-    let uptime = ${uptimeSeconds};
-
-    setInterval(() => {
-      uptime++;
-      document.getElementById("uptime").textContent = uptime;
-    }, 1000);
-  </script>
 </body>
 </html>
   `;
 
   res.send(html);
 });
-
 app.get("/join/:partyId", (req, res) => {
   const partyId = req.params.partyId;
   const deepLink = `syncmusic://join/${partyId}`;
-  const formLink = "https://forms.gle/8QbDmnZd2rXEk5W47";
+  const playStoreLink =
+    "https://play.google.com/store/apps/details?id=com.eb.sync_music";
 
   const html = `
 <!DOCTYPE html>
@@ -233,6 +227,12 @@ app.get("/join/:partyId", (req, res) => {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Join Sync Music Party</title>
+
+  <!-- Android intent fallback (BEST PRACTICE) -->
+  <meta http-equiv="refresh" content="0; url=intent://join/${partyId}#Intent;scheme=syncmusic;package=com.eb.sync_music;S.browser_fallback_url=${encodeURIComponent(
+    playStoreLink
+  )};end">
+
   <style>
     body {
       background: #121212;
@@ -252,25 +252,6 @@ app.get("/join/:partyId", (req, res) => {
       border-radius: 30px;
       font-weight: bold;
     }
-    .btn.secondary {
-      background: #333;
-      color: white;
-      border: 1px solid #444;
-    }
-    h2 {
-      margin-top: 40px;
-      font-size: 18px;
-    }
-    p {
-      color: #ccc;
-      max-width: 360px;
-      margin: 0 auto 10px;
-    }
-    .note {
-      font-size: 13px;
-      color: #aaa;
-      margin-top: 20px;
-    }
   </style>
 </head>
 <body>
@@ -279,41 +260,18 @@ app.get("/join/:partyId", (req, res) => {
   <p>Joining party: <strong>${partyId}</strong></p>
 
   <a href="${deepLink}" class="btn">
-    Open Sync Music App
+    Open in App
   </a>
 
-  <h2>Not in Closed Testing Yet?</h2>
-  <p>
-    Sync Music is currently in <strong>Google Play Closed Testing</strong>.<br>
-    Fill out the form below to get access.
-  </p>
-
-  <a href="${formLink}" class="btn secondary" target="_blank">
-    📝 Join Closed Testing
+  <a href="${playStoreLink}" class="btn">
+    Download from Play Store
   </a>
-
-  <p class="note">
-    Once approved, install the app from Play Store and return here to join the party.
-  </p>
-
-  <!-- Deep link reliability for Android browsers -->
-  <iframe src="${deepLink}" style="display:none;"></iframe>
 
   <script>
-    let userInteracted = false;
-
-    document.querySelectorAll('a').forEach(link => {
-      link.addEventListener('click', () => {
-        userInteracted = true;
-      });
-    });
-
-    // Auto-attempt app open
+    // Fallback for non-Android browsers
     setTimeout(function () {
-      if (!userInteracted) {
-        window.location.href = "${deepLink}";
-      }
-    }, 2000);
+      window.location.href = "${playStoreLink}";
+    }, 2500);
   </script>
 
 </body>
