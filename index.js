@@ -35,6 +35,9 @@ try {
 const db = admin.apps.length ? admin.firestore() : null; // Check if app initialized
 const PARTIES_COLLECTION = "active_parties";
 
+// Minimum members before vote-to-skip is offered. Low so small/new parties can use it.
+const MIN_MEMBERS_FOR_VOTE_SKIP = 3;
+
 if (!db) {
   console.warn("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
   console.warn("WARNING: Database is NOT connected.");
@@ -113,6 +116,18 @@ async function restoreParties() {
 // ---- HTTP Routes ----
 // Track uptime
 const serverStartedAt = Date.now();
+
+// Lightweight health check for external keep-warm pingers (UptimeRobot / cron-job.org).
+// Hit this every ~10 min to stop Render's free tier from sleeping (cold starts take 20-50s).
+// It intentionally does NO Firestore work so it stays fast and free.
+app.get("/healthz", (req, res) => {
+  res.json({
+    status: "ok",
+    uptimeSeconds: Math.floor((Date.now() - serverStartedAt) / 1000),
+    parties: parties.size,
+    serverTime: Date.now()
+  });
+});
 
 app.get("/", (req, res) => {
   const playStoreLink =
@@ -326,7 +341,8 @@ function getPartyOrError(socket, partyId) {
 
 function getMembersList(party) {
   return Array.from(party.members.entries()).map(([id, user]) => ({
-    id, // Socket ID
+    id, // Socket ID (changes on reconnect — don't use for identity)
+    userId: user.userId, // Persistent ID — stable across reconnects
     username: user.username,
     avatar: user.avatar,
     isHost: user.userId === party.hostUserId // Check against persistent ID
@@ -352,7 +368,7 @@ function getPublicParties() {
 function emitVoteState(partyId, party) {
   const size = party.members.size;
   // Voting enabled if enough people AND setting is allowed
-  const enabled = (size >= 5) && (party.settings ? party.settings.voteSkip : true);
+  const enabled = (size >= MIN_MEMBERS_FOR_VOTE_SKIP) && (party.settings ? party.settings.voteSkip : true);
   const required = enabled ? Math.ceil(size * 0.5) : 0; // 50% Threshold
 
   io.to(partyId).emit("VOTE_UPDATE", {
@@ -453,8 +469,7 @@ io.on("connection", (socket) => {
     const isReturningHost = party.hostUserId === userId;
 
     if (isReturningHost) {
-      party.hostId = socket.id; // Reclaim active socket
-      party.hostDisconnectedAt = null; // Host is back! Cancel transfer.
+      party.hostId = socket.id; // Reclaim active host seat
     }
 
     party.members.set(socket.id, { username, avatar, userId });
@@ -471,8 +486,9 @@ io.on("connection", (socket) => {
     });
 
     if (isReturningHost) {
-      io.to(partyId).emit("INFO", "The Host has reconnected!");
-      io.to(partyId).emit("HOST_UPDATE", { hostId: socket.id });
+      io.to(partyId).emit("INFO", "The host has reconnected!");
+      io.to(partyId).emit("HOST_UPDATE", { hostId: socket.id, hostUserId: party.hostUserId });
+      io.to(partyId).emit("HOST_PRESENCE", { present: true });
     } else {
       io.to(partyId).emit("INFO", `${username} joined the party`);
     }
@@ -494,9 +510,8 @@ io.on("connection", (socket) => {
     if (!party) return;
 
     if (party.hostUserId === userId) {
-      // Success: It is the host
+      // Success: It is the host reclaiming the seat
       party.hostId = socket.id;
-      party.hostDisconnectedAt = null; // Host is back!
       party.members.set(socket.id, { username, avatar, userId });
       await socket.join(partyId);
 
@@ -508,8 +523,9 @@ io.on("connection", (socket) => {
         serverTime: Date.now()
       });
 
-      io.to(partyId).emit("INFO", "The Host has reconnected!");
-      io.to(partyId).emit("HOST_UPDATE", { hostId: socket.id });
+      io.to(partyId).emit("INFO", "The host has reconnected!");
+      io.to(partyId).emit("HOST_UPDATE", { hostId: socket.id, hostUserId: party.hostUserId });
+      io.to(partyId).emit("HOST_PRESENCE", { present: true });
 
       broadcastPartySize(partyId);
       broadcastMembersList(partyId);
@@ -640,7 +656,7 @@ io.on("connection", (socket) => {
     if (party.settings && !party.settings.voteSkip) return;
 
     const size = party.members.size;
-    if (size < 5) return;
+    if (size < MIN_MEMBERS_FOR_VOTE_SKIP) return;
 
     party.votesToSkip.add(socket.id);
     emitVoteState(partyId, party);
@@ -808,11 +824,15 @@ io.on("connection", (socket) => {
         broadcastMembersList(partyId);
         emitVoteState(partyId, party);
 
-        // CHECK IF HOST
+        // If the active host socket left, empty the host SEAT but KEEP
+        // hostUserId. The creator is the permanent host and reclaims control
+        // automatically when they rejoin (matched by their persistent userId).
+        // We never hand host to another user.
         if (party.hostId === socket.id) {
-          console.log(`Host of party ${partyId} disconnected. Starting grace period.`);
-          // Start Grace Period
-          party.hostDisconnectedAt = Date.now();
+          console.log(`Host of party ${partyId} disconnected. Host seat empty, awaiting creator reclaim.`);
+          party.hostId = null;
+          io.to(partyId).emit("HOST_PRESENCE", { present: false });
+          io.to(partyId).emit("INFO", `${user.username} (host) disconnected. They can rejoin to resume control.`);
         }
 
         saveParty(party);
@@ -829,60 +849,16 @@ setInterval(() => {
       io.to(id).emit("SYNC", { serverTime: now, startedAt: party.startedAt, currentIndex: party.currentIndex });
     }
 
-    // ---- 1. AUTO-CLAIM THRONE (If host is missing but members exist) ----
-    if (!party.hostId && party.members.size > 0) {
-      const nextSocketId = party.members.keys().next().value;
-      const nextUser = party.members.get(nextSocketId);
-
-      party.hostId = nextSocketId;
-      party.hostUserId = nextUser.userId;
-      party.hostDisconnectedAt = null;
-
-      io.to(id).emit("HOST_UPDATE", { hostId: nextSocketId });
-      io.to(id).emit("INFO", `Host position was empty. ${nextUser.username} is now the Host.`);
-      broadcastMembersList(id);
+    // ---- HOST PRESENCE SAFETY ----
+    // The creator (party.hostUserId) is the PERMANENT host and always reclaims
+    // control on reconnect. We never transfer host to another user. If the
+    // active host socket vanished without a clean disconnect event, just mark
+    // the seat empty; hostUserId is left untouched so the creator can reclaim.
+    if (party.hostId && !party.members.has(party.hostId)) {
+      console.log(`Party ${id}: Host socket ${party.hostId} missing. Emptying host seat (awaiting creator reclaim).`);
+      party.hostId = null;
+      io.to(id).emit("HOST_PRESENCE", { present: false });
       saveParty(party);
-      continue;
-    }
-
-    // ---- 2. HOST PRESENCE CHECK ----
-    // Only check if we HAVE a host assigned, and they are missing
-    if (party.hostId && !party.members.has(party.hostId) && !party.hostDisconnectedAt) {
-      console.log(`Party ${id}: Host socket ${party.hostId} not found in members. Starting grace period.`);
-      party.hostDisconnectedAt = Date.now();
-      saveParty(party);
-    }
-
-    // ---- 3. HOST GRACE PERIOD CHECK ----
-    if (party.hostDisconnectedAt) {
-      const gracePeriod = 120 * 1000; // 120 Seconds
-      if (now - party.hostDisconnectedAt > gracePeriod) {
-        console.log(`Party ${id}: Host grace period expired.`);
-
-        if (party.members.size > 0) {
-          // Transfer leadership
-          const nextSocketId = party.members.keys().next().value;
-          const nextUser = party.members.get(nextSocketId);
-
-          party.hostId = nextSocketId;
-          party.hostUserId = nextUser.userId;
-          party.hostDisconnectedAt = null;
-
-          io.to(id).emit("HOST_UPDATE", { hostId: nextSocketId });
-          io.to(id).emit("INFO", `Host inactive. ${nextUser.username} is now the Host.`);
-          broadcastMembersList(id);
-          saveParty(party);
-        } else {
-          // No one left? Make party DORMANT (Hostless) instead of deleting.
-          // This allows the original host to reclaim it later (within 24h).
-          console.log(`Party ${id}: No members left. Setting to DORMANT (waiting for reclaim).`);
-          party.hostId = null; // No active host
-          party.hostDisconnectedAt = null; // Stop timer
-          party.isPlaying = false; // Pause music
-
-          saveParty(party);
-        }
-      }
     }
 
     // Cleanup old parties (24 Hours Inactivity)
